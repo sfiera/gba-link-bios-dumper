@@ -1,174 +1,86 @@
-#---------------------------------------------------------------------------------
-# Clear the implicit built in rules
-#---------------------------------------------------------------------------------
 .SUFFIXES:
 #---------------------------------------------------------------------------------
 ifeq ($(strip $(DEVKITARM)),)
 $(error "Please set DEVKITARM in your environment. export DEVKITARM=<path to>devkitARM)
 endif
-
-include $(DEVKITARM)/gba_rules
-
-#---------------------------------------------------------------------------------
-# TARGET is the name of the output, if this ends with _mb a multiboot image is generated
-# BUILD is the directory where object files & intermediate files will be placed
-# SOURCES is a list of directories containing source code
-# DATA is a list of directories containing data files
-# INCLUDES is a list of directories containing header files
-#---------------------------------------------------------------------------------
-TARGET		:=	bios-dump
-BUILD		:=	build
-SOURCES		:=	src
-DATA		:=
-GRAPHICS	:=
-INCLUDES	:=	include
-DEFINES		:=	-DBIOS_WRITE_SRAM -DBIOS_CALC_SHA256
-
-#---------------------------------------------------------------------------------
-# options for code generation
-#---------------------------------------------------------------------------------
-ARCH	:=	-marm
-
-CFLAGS	:=	-g -Wall -O3\
-		-mcpu=arm7tdmi -mtune=arm7tdmi\
- 		-fomit-frame-pointer\
-		-ffast-math \
-		$(ARCH) $(DEFINES)
-
-CFLAGS	+=	$(INCLUDE)
-
-CXXFLAGS	:=	$(CFLAGS) -fno-rtti -fno-exceptions
-
-ASFLAGS	:=	$(ARCH) $(INCLUDE)
-LDFLAGS	=	-g $(ARCH) -Wl,-Map,$(notdir $@).map
-
-#---------------------------------------------------------------------------------
-# any extra libraries we wish to link with the project
-#---------------------------------------------------------------------------------
-LIBS	:=	-lgba
-
-#---------------------------------------------------------------------------------
-# list of directories containing libraries, this must be the top level containing
-# include and lib
-#---------------------------------------------------------------------------------
-LIBDIRS	:=	$(LIBGBA)
-
-#---------------------------------------------------------------------------------
-# no real need to edit anything past this point unless you need to add additional
-# rules for different file extensions
-#---------------------------------------------------------------------------------
-ifneq ($(BUILD),$(notdir $(CURDIR)))
-#---------------------------------------------------------------------------------
-
-export OUTPUT	:=	$(CURDIR)/$(TARGET)
-export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
-			$(foreach dir,$(DATA),$(CURDIR)/$(dir)) \
-			$(foreach dir,$(GRAPHICS),$(CURDIR)/$(dir))
-
-export DEPSDIR	:=	$(CURDIR)/$(BUILD)
-
-#---------------------------------------------------------------------------------
-# automatically build a list of object files for our project
-#---------------------------------------------------------------------------------
-CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
-CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
-SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
-BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
-GRITFILES	:=	$(foreach dir,$(GRAPHICS),$(notdir $(wildcard $(dir)/*.grit)))
-
-#---------------------------------------------------------------------------------
-# use CXX for linking C++ projects, CC for standard C
-#---------------------------------------------------------------------------------
-ifeq ($(strip $(CPPFILES)),)
-#---------------------------------------------------------------------------------
-	export LD	:=	$(CC)
-#---------------------------------------------------------------------------------
-else
-#---------------------------------------------------------------------------------
-	export LD	:=	$(CXX)
-#---------------------------------------------------------------------------------
+ifeq ($(strip $(DEVKITPRO)),)
+$(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>devkitPro)
 endif
-#---------------------------------------------------------------------------------
 
-export OFILES	:=	$(addsuffix .o,$(BINFILES)) \
-					$(GRITFILES:.grit=.o) \
-					$(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
+include $(DEVKITARM)/base_tools
 
-#---------------------------------------------------------------------------------
-# build a list of include paths
-#---------------------------------------------------------------------------------
-export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
-			$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
-			-I$(CURDIR)/$(BUILD)
+TARGET      = bios_linker.gba bios_dumper.gba
+SRC_LINKER  = src/bios-link.cpp \
+              src/Sha256.cpp \
+              $(BUILD)/bios_dumper.gba.s
+SRC_DUMPER  = src/bios-dump.cpp
 
-#---------------------------------------------------------------------------------
-# build a list of library paths
-#---------------------------------------------------------------------------------
-export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
+.PHONY: all
+all: $(TARGET)
 
-.PHONY: $(BUILD) clean
+BUILD       = build
+GAME_CODE   = 0000
+MAKER_CODE  = 00
 
-#---------------------------------------------------------------------------------
-$(BUILD):
-	@[ -d $@ ] || mkdir -p $@
-	@make --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+ARCH        = -marm
+LIBS        = -lgba
+LIBDIRS     = $(DEVKITPRO)/libgba
 
-all	: $(BUILD)
-#---------------------------------------------------------------------------------
+DEFINES     = -DBIOS_WRITE_SRAM -DBIOS_CALC_SHA256
+INCLUDES    = -iquote $(BUILD) \
+              -iquote include \
+              -iquote gba-link-connection/lib \
+              $(LIBDIRS:%=-isystem %/include)
+CFLAGS      = -g -Wall -O3 \
+              $(ARCH) -mcpu=arm7tdmi -mtune=arm7tdmi \
+              -fomit-frame-pointer \
+              -ffast-math \
+              $(DEFINES) \
+              $(INCLUDES)
+
+LD          = $(CXX)
+LDFLAGS     = -g $(ARCH) -Wl,-Map,$@.map \
+              $(LIBDIRS:%=-L%/lib) $(LIBS)
+
+OBJ_LINKER  = $(SRC_LINKER:%=$(BUILD)/%.o)
+OBJ_DUMPER  = $(SRC_DUMPER:%=$(BUILD)/%.o)
+OBJ         = $(OBJ_LINKER) $(OBJ_DUMPER)
+
+build/src/bios-link.cpp.o: build/bios_dumper.gba.h
+
+.PHONY: clean
 clean:
-	@echo clean ...
-	@rm -fr $(BUILD) $(TARGET).elf $(TARGET).gba
+	rm -fr $(BUILD) $(TARGET)
 
-#---------------------------------------------------------------------------------
-else
+%.gba: $(BUILD)/%.elf
+	$(OBJCOPY) -O binary $< $(BUILD)/$*.gba
+	gbafix $(BUILD)/$*.gba -t$* -c$(GAME_CODE) -m$(MAKER_CODE)
+	mv $(BUILD)/$*.gba .
 
-DEPENDS	:=	$(OFILES:.o=.d)
+$(BUILD)/bios_linker.elf: $(OBJ_LINKER)
+	$(LD) -specs=gba.specs $+ $(LDFLAGS) -o $@
 
-#---------------------------------------------------------------------------------
-# main targets
-#---------------------------------------------------------------------------------
-$(OUTPUT).gba	:	$(OUTPUT).elf
+$(BUILD)/bios_dumper.elf: $(OBJ_DUMPER)
+	$(LD) -specs=gba_mb.specs $+ $(LDFLAGS) -o $@
 
-$(OUTPUT).elf	:	$(OFILES)
+$(BUILD)/%.c.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) -MMD -MP -MF $(BUILD)/$*.d $(CFLAGS) -c $< -o $@ $(ERROR_FILTER)
 
-%.gba: %.elf
-	@$(OBJCOPY) -O binary $< $@
-	@echo built ... $(notdir $@)
-	@gbafix -p $@
+$(BUILD)/%.s.o: %.s
+	@mkdir -p $(dir $@)
+	$(CC) -MMD -MP -MF $(BUILD)/$*.d -c $< -o $@ $(ERROR_FILTER)
 
-#---------------------------------------------------------------------------------
-# The bin2o rule should be copied and modified
-# for each extension used in the data directories
-#---------------------------------------------------------------------------------
+$(BUILD)/%.cpp.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) -MMD -MP -MF $(BUILD)/$*.d $(CFLAGS) -c $< -o $@ $(ERROR_FILTER)
 
-#---------------------------------------------------------------------------------
-# This rule links in binary data with the .bin extension
-#---------------------------------------------------------------------------------
-%.bin.o	:	%.bin
-#---------------------------------------------------------------------------------
-	@echo $(notdir $<)
-	@$(bin2o)
+$(BUILD)/%.s $(BUILD)/%.h: %
+	bin2s -a 4 -H $(BUILD)/$*.h $< > $(BUILD)/$*.s
 
-#---------------------------------------------------------------------------------
-# This rule links in binary data with the .raw extension
-#---------------------------------------------------------------------------------
-%.raw.o	:	%.raw
-#---------------------------------------------------------------------------------
-	@echo $(notdir $<)
-	@$(bin2o)
-
-#---------------------------------------------------------------------------------
-# This rule creates assembly source files using grit
-# grit takes an image file and a .grit describing how the file is to be processed
-# add additional rules like this for each image extension
-# you use in the graphics folders 
-#---------------------------------------------------------------------------------
-%.s %.h	: %.grit
-#---------------------------------------------------------------------------------
+%.s %.h: %.grit
 	grit -ff $< -fts -o$*
 
--include $(DEPENDS)
+.SECONDARY:
 
-#---------------------------------------------------------------------------------
-endif
-#---------------------------------------------------------------------------------
+-include $(OBJ:.o=.d)
