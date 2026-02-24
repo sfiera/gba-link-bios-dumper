@@ -1,6 +1,6 @@
 #include <gba_systemcalls.h>
 
-IWRAM_DATA u8 out[0x4000];
+__attribute__((section(".bss"))) u8 out[0x4000];
 
 volatile u16* REG_RCNT         = (volatile u16*)(0x04000134);
 volatile u16* REG_SIOCNT       = (volatile u16*)(0x04000128);
