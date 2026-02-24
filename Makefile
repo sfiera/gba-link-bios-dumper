@@ -13,7 +13,7 @@ TARGET      = bios_linker.gba bios_dumper.gba
 SRC_LINKER  = src/bios-link.cpp \
               src/Sha256.cpp \
               $(BUILD)/bios_dumper.gba.s
-SRC_DUMPER  = src/bios-dump.cpp
+SRC_DUMPER  = src/bios-dump.c
 
 .PHONY: all
 all: $(TARGET)

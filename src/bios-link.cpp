@@ -16,20 +16,6 @@ char savetype[] = "SRAM_V123"; // So that save tools can figure out the format
 
 IWRAM_DATA u8 out[0x4000];
 
-void dump(void) {
-	__asm__ __volatile__(
-		"mov r0, #0 \n"
-		"ldr r11, =out \n"
-		"orr r10, r11, #0x4000 \n"
-		"mov r1, r11 \n"
-		"ldr r12, =0xC14 \n" // CpuFastSet core
-		"add lr, pc, #4 \n"
-		"push {r4-r10,lr} \n"
-		"bx r12 \n"
-		"mov r0, #0xE000000 \n"
-	: : : "r0", "r1", "r2", "r3", "r10", "r11", "r12", "lr", "memory");
-}
-
 #ifdef BIOS_CALC_SHA256
 const u8 sha256_checksum_agb[SHA256_DIGEST_SIZE] = {
 	0xfd, 0x25, 0x47, 0x72, 0x4b, 0x50, 0x5f, 0x48,
