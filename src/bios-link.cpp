@@ -6,7 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "bios_dumper.gba.h"
-#include "LinkCable.hpp"
+#include "LinkRawCable.hpp"
 #include "LinkCableMultiboot.hpp"
 #ifdef BIOS_CALC_SHA256
 #include "Sha256.h"
@@ -68,7 +68,7 @@ void calcSha256(void) {
 }
 #endif
 
-IWRAM_DATA LinkCable* linkCable;
+IWRAM_DATA LinkRawCable* linkRawCable;
 IWRAM_DATA LinkCableMultiboot* linkCableMultiboot;
 
 LinkCableMultiboot::Result send_rom() {
@@ -86,26 +86,22 @@ LinkCableMultiboot::Result send_rom() {
 }
 
 bool recv_bios() {
-    irqSet((irqMASK)IRQ_VBLANK, LINK_CABLE_ISR_VBLANK);
-    irqEnable(IRQ_VBLANK);
-    irqSet((irqMASK)IRQ_SERIAL, LINK_CABLE_ISR_SERIAL);
+    irqSet((irqMASK)IRQ_SERIAL, LINK_RAW_CABLE_ISR_SERIAL);
     irqEnable(IRQ_SERIAL);
-    irqSet((irqMASK)IRQ_TIMER3, LINK_CABLE_ISR_TIMER);
-    irqEnable(IRQ_TIMER3);
-    linkCable->activate();
+    linkRawCable->activate();
 
     u8* data = out;
     u8* const end = out + 0x4000;
 
     while (true) {
-        linkCable->sync();
-        if (linkCable->isConnected()
-            && linkCable->currentPlayerId() == 0
-            && linkCable->canRead(1)) {
-            u16 message = linkCable->read(1);
-            iprintf("msg: $%04hx\n", message);
-            *data = message & 0xFF;
-            if (++data == end) {
+        u16 message = linkRawCable->transfer(0x0200).data[1];
+        if ((message & 0xFF00) == 0x0100) {
+            *(data++) = message & 0xFF;
+            if (((data - out) % 0x400) == 0) {
+                iprintf(".");
+            }
+            if (data == end) {
+                iprintf("\n");
                 return true;
             }
         }
@@ -114,7 +110,7 @@ bool recv_bios() {
 
 int main() {
     int mb, pct;
-    linkCable = new LinkCable;
+    linkRawCable = new LinkRawCable;
     linkCableMultiboot = new LinkCableMultiboot;
     irqInit();
 

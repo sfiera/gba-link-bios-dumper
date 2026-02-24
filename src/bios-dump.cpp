@@ -3,7 +3,7 @@
 #include <gba_systemcalls.h>
 #include <gba_timers.h>
 #include <stdio.h>
-#include "LinkCable.hpp"
+#include "LinkRawCable.hpp"
 
 char savetype[] = "SRAM_V123"; // So that save tools can figure out the format
 
@@ -23,38 +23,34 @@ void dump(void) {
 	: : : "r0", "r1", "r2", "r3", "r10", "r11", "r12", "lr", "memory");
 }
 
-LinkCable* linkCable;
+LinkRawCable* linkRawCable;
 
 void send_rom() {
-    irqSet((irqMASK)IRQ_VBLANK, LINK_CABLE_ISR_VBLANK);
-    irqEnable(IRQ_VBLANK);
-    irqSet((irqMASK)IRQ_SERIAL, LINK_CABLE_ISR_SERIAL);
+    irqSet((irqMASK)IRQ_SERIAL, LINK_RAW_CABLE_ISR_SERIAL);
     irqEnable(IRQ_SERIAL);
-    irqSet((irqMASK)IRQ_TIMER3, LINK_CABLE_ISR_TIMER);
-    irqEnable(IRQ_TIMER3);
-    linkCable->activate();
+    linkRawCable->activate();
 
     const u8* data = out;
     const u8* const end = out + 0x4000;
 
     while (true) {
-        linkCable->sync();
-        if (linkCable->isConnected()
-            && linkCable->currentPlayerId() == 1) {
-            u16 message = 0x0100 | *data;
-            iprintf("msg: $%04hx\n", message);
-            if (linkCable->send(message)) {
-                ++data;
-            }
-            if (data == end) {
-                return;
-            }
+        u16 message = 0x0100 | *data;
+        if (linkRawCable->transfer(message).playerId < 0) {
+            continue;
+        }
+        ++data;
+        if (((data - out) % 0x400) == 0) {
+            iprintf(".");
+        }
+        if (data == end) {
+            iprintf("\n");
+            return;
         }
     }
 }
 
 int main() {
-    linkCable = new LinkCable;
+    linkRawCable = new LinkRawCable;
     irqInit();
 	consoleDemoInit();
 
