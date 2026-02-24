@@ -6,13 +6,17 @@
 #include <string.h>
 #include <unistd.h>
 #include "bios_dumper.gba.h"
-#include "LinkRawCable.hpp"
 #include "LinkCableMultiboot.hpp"
 #ifdef BIOS_CALC_SHA256
 #include "Sha256.h"
 #endif
 
 char savetype[] = "SRAM_V123"; // So that save tools can figure out the format
+
+volatile u16* REG_RCNT         = (volatile u16*)(0x04000134);
+volatile u16* REG_SIOCNT       = (volatile u16*)(0x04000128);
+volatile u16* REG_SIOMLT_SEND  = (volatile u16*)(0x0400012A);
+volatile u16* REG_SIOMULTI     = (volatile u16*)(0x04000120);
 
 IWRAM_DATA u8 out[0x4000];
 
@@ -54,7 +58,6 @@ void calcSha256(void) {
 }
 #endif
 
-IWRAM_DATA LinkRawCable* linkRawCable;
 IWRAM_DATA LinkCableMultiboot* linkCableMultiboot;
 
 LinkCableMultiboot::Result send_rom() {
@@ -65,22 +68,31 @@ LinkCableMultiboot::Result send_rom() {
 
     u32 size = (bios_dumper_gba_size + 0xF) & ~0xF;
     iprintf("Sending %ld bytes\n", size);
+    LinkCableMultiboot::Result result = LinkCableMultiboot::Result::NONE;
     if (!linkCableMultiboot->sendRom(bios_dumper_gba, size)) {
-        return linkCableMultiboot->getDetailedResult();
+        result = linkCableMultiboot->getDetailedResult();
     }
-    return LinkCableMultiboot::Result::NONE;
+
+    return result;
 }
 
 bool recv_bios() {
-    irqSet((irqMASK)IRQ_SERIAL, LINK_RAW_CABLE_ISR_SERIAL);
-    irqEnable(IRQ_SERIAL);
-    linkRawCable->activate();
+    *REG_RCNT         = 0x0000;
+    *REG_SIOMLT_SEND  = 0x0000;
+    *REG_SIOCNT       = 0x2003;
 
     u8* data = out;
     u8* const end = out + 0x4000;
 
     while (true) {
-        u16 message = linkRawCable->transfer(0x0200).data[1];
+        *REG_SIOMLT_SEND = 0x0200;
+        *REG_SIOCNT |= 1 << 7;
+        while ((*REG_SIOCNT >> 7) & 1) {}
+
+        if (!((*REG_SIOCNT >> 3) & 1) || ((*REG_SIOCNT >> 6) & 1)) {
+            continue;
+        }
+        u16 message = REG_SIOMULTI[1];
         if ((message & 0xFF00) == 0x0100) {
             *(data++) = message & 0xFF;
             if (((data - out) % 0x400) == 0) {
@@ -96,7 +108,6 @@ bool recv_bios() {
 
 int main() {
     int mb, pct;
-    linkRawCable = new LinkRawCable;
     linkCableMultiboot = new LinkCableMultiboot;
     irqInit();
 
