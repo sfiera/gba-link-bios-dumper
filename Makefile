@@ -10,8 +10,8 @@ endif
 include $(DEVKITARM)/base_tools
 
 TARGET      = bios_linker.gba bios_dumper.gba
-SRC_LINKER  = src/bios-link.cpp \
-              src/Sha256.cpp \
+SRC_LINKER  = src/bios-link.c \
+              src/Sha256.c \
               $(BUILD)/bios_dumper.gba.s
 SRC_DUMPER  = src/bios-dump.c
 
@@ -38,7 +38,7 @@ CFLAGS      = -g -Wall -O3 \
               $(DEFINES) \
               $(INCLUDES)
 
-LD          = $(CXX)
+LD          = $(CC)
 LDFLAGS     = -g $(ARCH) -Wl,-Map,$@.map \
               $(LIBDIRS:%=-L%/lib) $(LIBS)
 
@@ -46,7 +46,7 @@ OBJ_LINKER  = $(SRC_LINKER:%=$(BUILD)/%.o)
 OBJ_DUMPER  = $(SRC_DUMPER:%=$(BUILD)/%.o)
 OBJ         = $(OBJ_LINKER) $(OBJ_DUMPER)
 
-build/src/bios-link.cpp.o: build/bios_dumper.gba.h
+build/src/bios-link.c.o: build/bios_dumper.gba.h
 
 .PHONY: clean
 clean:
@@ -70,10 +70,6 @@ $(BUILD)/%.c.o: %.c
 $(BUILD)/%.s.o: %.s
 	@mkdir -p $(dir $@)
 	$(CC) -MMD -MP -MF $(BUILD)/$*.d -c $< -o $@ $(ERROR_FILTER)
-
-$(BUILD)/%.cpp.o: %.cpp
-	@mkdir -p $(dir $@)
-	$(CXX) -MMD -MP -MF $(BUILD)/$*.d $(CFLAGS) -c $< -o $@ $(ERROR_FILTER)
 
 $(BUILD)/%.s $(BUILD)/%.h: %
 	bin2s -a 4 -H $(BUILD)/$*.h $< > $(BUILD)/$*.s

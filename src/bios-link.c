@@ -22,7 +22,7 @@ IWRAM_DATA u8 out[0x4000];
 
 #define LINK_CABLE_MULTIBOOT_PALETTE_DATA 0b10010011
 
-static u32 randomSeed = 123;
+u32 randomSeed = 123;
 
 inline int _qran() {
   randomSeed = 1664525 * randomSeed + 1013904223;
