@@ -18,7 +18,7 @@ volatile u16* REG_SIOMLT_SEND  = (volatile u16*)(0x0400012A);
 volatile u16* REG_SIOMULTI     = (volatile u16*)(0x04000120);
 volatile u16* REG_VCOUNT       = (volatile u16*)(0x04000006);
 
-IWRAM_DATA u8 out[0x4000];
+__attribute__((section(".bss"))) u8 out[0x4000];
 
 #define LINK_CABLE_MULTIBOOT_PALETTE_DATA 0b10010011
 
