@@ -137,36 +137,23 @@ Response transfer(u16 data) {
   return response;
 }
 
-template <typename F>
-bool validateResponse(Response response, F check) {
-  u32 count = 0;
-  for (u32 i = 0; i < MAX_CLIENTS; i++) {
+bool isResponseSameAsValue(Response response,
+                           u8 clientMask,
+                           u16 wantedValue,
+                           u16 mask) {
+  bool any = false;
+  for (int i = 0; i < MAX_CLIENTS; ++i) {
     u32 value = response.data[1 + i];
     if (value == 0xFFFF) {
-      // Note that throughout this process, any clients that are not
-      // connected will always respond with 0xFFFF - be sure to ignore them.
       continue;
     }
-
-    if (!check(i, value))
+    u8 clientBit = 1 << (i + 1);
+    if ((clientMask & clientBit) && ((value & mask) != wantedValue)) {
       return false;
-    count++;
+    }
+    any = true;
   }
-
-  return count > 0;
-}
-
-bool isResponseSameAsValue(Response response,
-                                  u8 clientMask,
-                                  u16 wantedValue,
-                                  u16 mask) {
-  return validateResponse(
-      response, [&clientMask, &wantedValue, &mask](u32 i, u32 value) {
-        u8 clientBit = 1 << (i + 1);
-        bool isInvalid =
-            (clientMask & clientBit) && ((value & mask) != wantedValue);
-        return !isInvalid;
-      });
+  return any;
 }
 
 bool confirmHandshakeData(_MultiBootParam* multiBootParameters) {
@@ -187,22 +174,24 @@ bool confirmHandshakeData(_MultiBootParam* multiBootParameters) {
 }
 
 bool isResponseSameAsValueWithClientBit(Response response,
-                                               u8 clientMask,
-                                               u32 wantedValue) {
-  return validateResponse(
-      response, [&clientMask, &wantedValue](u32 i, u32 value) {
-        u8 clientBit = 1 << (i + 1);
-        bool isInvalid =
-            (clientMask & clientBit) && (value != (wantedValue | clientBit));
-        return !isInvalid;
-      });
+                                        u8 clientMask,
+                                        u32 wantedValue) {
+  bool any = false;
+  for (int i = 0; i < MAX_CLIENTS; ++i) {
+    u32 value = response.data[1 + i];
+    if (value == 0xFFFF) {
+      continue;
+    }
+    u8 clientBit = 1 << (i + 1);
+    if ((clientMask & clientBit) && (value != (wantedValue | clientBit))) {
+      return false;
+    }
+    any = true;
+  }
+  return any;
 }
 
 bool detectClients(_MultiBootParam* multiBootParameters) {
-  // 2. Initiate a multiplayer communication session, using either Normal mode
-  // for a single client or MultiPlay mode for multiple clients.
-  start();
-
   // 3. Send the word 0x6200 repeatedly until all detected clients respond
   // with 0x720X, where X is their client number (1-3). If they fail to do
   // this after 16 tries, delay 1/16s and go back to step 2. (*)
@@ -211,26 +200,32 @@ bool detectClients(_MultiBootParam* multiBootParameters) {
     Response response = transfer(CMD_HANDSHAKE);
     multiBootParameters->client_bit = 0;
 
-    success =
-        validateResponse(response, [&multiBootParameters](u32 i, u16 value) {
-          if ((value & 0xFFF0) == ACK_HANDSHAKE) {
-            u8 clientId = value & 0xF;
-            u8 expectedClientId = 1 << (i + 1);
-            if (clientId == expectedClientId) {
-              multiBootParameters->client_bit |= clientId;
-              return true;
-            }
-          }
-          return false;
-        });
+    for (int i = 0; i < MAX_CLIENTS; ++i) {
+      u32 value = response.data[1 + i];
+      if (value == 0xFFFF) {
+        continue;
+      } else if ((value & 0xFFF0) != ACK_HANDSHAKE) {
+        success = false;
+        break;
+      }
+      u8 clientId = value & 0xF;
+      u8 expectedClientId = 1 << (i + 1);
+      if (clientId != expectedClientId) {
+        success = false;
+        break;
+      }
+      multiBootParameters->client_bit |= clientId;
+      success = true;
+    }
 
     if (success)
       break;
   }
 
-  if (!success)
-    return false;
+  return success;
+}
 
+bool confirmClients(_MultiBootParam* multiBootParameters) {
   // 4. Fill in client_bit in the multiboot parameter structure (with
   // bits 1-3 set according to which clients responded). Send the word
   // 0x610Y, where Y is that same set of set bits.
@@ -238,11 +233,8 @@ bool detectClients(_MultiBootParam* multiBootParameters) {
       transfer(CMD_CONFIRM_CLIENTS | multiBootParameters->client_bit);
 
   // The clients should respond 0x7200.
-  if (!isResponseSameAsValueWithClientBit(
-          response, multiBootParameters->client_bit, ACK_HANDSHAKE))
-    return false;
-
-  return true;
+  return isResponseSameAsValueWithClientBit(
+      response, multiBootParameters->client_bit, ACK_HANDSHAKE);
 }
 
 bool sendHeader(_MultiBootParam* multiBootParameters, const u8* rom) {
@@ -283,29 +275,31 @@ bool sendPalette(_MultiBootParam* multiBootParameters) {
   // random byte. Store these bytes in client_data in the parameter structure.
   u16 data = CMD_SEND_PALETTE | LINK_CABLE_MULTIBOOT_PALETTE_DATA;
 
-  bool success = false;
   for (u32 i = 0; i < DETECTION_TRIES; i++) {
     Response response = transfer(data);
-    u8 sendMask = multiBootParameters->client_bit;
-    success = validateResponse(
-                  response,
-                  [&multiBootParameters, &sendMask](u32 i, u16 value) {
-                    u8 clientBit = 1 << (i + 1);
-                    if ((multiBootParameters->client_bit & clientBit) &&
-                        ((value & ACK_RESPONSE_MASK) == ACK_RESPONSE)) {
-                      multiBootParameters->client_data[i] = value & 0xFF;
-                      sendMask &= ~clientBit;
-                      return true;
-                    }
-                    return false;
-                  }) &&
-              sendMask == 0;
+    u8 successes = 0;
 
-    if (success)
-      break;
+    for (u32 i = 0; i < MAX_CLIENTS; i++) {
+      u32 value = response.data[1 + i];
+      if (value == 0xFFFF) {
+        continue;
+      }
+      u8 clientBit = 1 << (i + 1);
+      if (!(multiBootParameters->client_bit & clientBit) ||
+          ((value & ACK_RESPONSE_MASK) != ACK_RESPONSE)) {
+        successes = 0;
+        break;
+      }
+      multiBootParameters->client_data[i] = value & 0xFF;
+      successes |= clientBit;
+    }
+
+    if (successes == multiBootParameters->client_bit) {
+      return true;
+    }
   }
 
-  return success;
+  return false;
 }
 
 bool sendRom(const u8* rom, u32 romSize) {
@@ -327,7 +321,12 @@ bool sendRom(const u8* rom, u32 romSize) {
     multiBootParameters.boot_srcp = (u8*)rom + HEADER_SIZE;
     multiBootParameters.boot_endp = (u8*)rom + romSize;
 
+    // 2. Initiate a multiplayer communication session, using either Normal mode
+    // for a single client or MultiPlay mode for multiple clients.
+    start();
+
     if (detectClients(&multiBootParameters) &&
+        confirmClients(&multiBootParameters) &&
         sendHeader(&multiBootParameters, rom) &&
         sendPalette(&multiBootParameters) &&
         confirmHandshakeData(&multiBootParameters)) {
