@@ -58,12 +58,10 @@ void calcSha256(void) {
 }
 #endif
 
-IWRAM_DATA LinkCableMultiboot* linkCableMultiboot;
-
-LinkCableMultiboot::Result send_rom() {
+bool send_rom() {
     u32 size = (bios_dumper_gba_size + 0xF) & ~0xF;
     iprintf("Sending %ld bytes\n", size);
-    return linkCableMultiboot->sendRom(bios_dumper_gba, size);
+    return LinkCableMultiboot::sendRom(bios_dumper_gba, size);
 }
 
 bool recv_bios() {
@@ -97,8 +95,6 @@ bool recv_bios() {
 }
 
 int main() {
-    linkCableMultiboot = new LinkCableMultiboot;
-
 	consoleDemoInit();
 
 	if (strcmp(savetype, "SRAM_V123") != 0) {
@@ -110,9 +106,8 @@ int main() {
 		return 1;
 	}
     
-    LinkCableMultiboot::Result result = send_rom();
-    if (result != LinkCableMultiboot::Result::SUCCESS) {
-        iprintf("Failed to send: %d\n", (int)result);
+    if (!send_rom()) {
+        iprintf("Failed to send\n");
         goto wait;
     }
 

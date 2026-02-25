@@ -1,81 +1,76 @@
 #ifndef LINK_CABLE_MULTIBOOT_H
 #define LINK_CABLE_MULTIBOOT_H
 
-// --------------------------------------------------------------------------
-// A Multiboot tool to send small programs from one GBA to up to 3 slaves.
-// --------------------------------------------------------------------------
-// Usage:
-// - 1) Include this header in your main.cpp file and add:
-//       LinkCableMultiboot* linkCableMultiboot = new LinkCableMultiboot();
-// - 2) Send the ROM:
-//       LinkCableMultiboot::Result result = linkCableMultiboot->sendRom(
-//         romBytes, // for current ROM, use: ((const u8*)MEM_EWRAM)
-//                   // ^ must be 4-byte aligned
-//         romLength, // in bytes, should be multiple of 16
-//         []() {
-//           u16 keys = ~REG_KEYS & KEY_ANY;
-//           return keys & KEY_START;
-//           // (when this returns true, the transfer will be canceled)
-//         }
-//       );
-//       // `result` should be LinkCableMultiboot::Result::SUCCESS
-// - 3) (Optional) Send ROMs asynchronously:
-//       LinkCableMultiboot::Async* linkCableMultibootAsync =
-//         new LinkCableMultiboot::Async();
-//       interrupt_init();
-//       interrupt_add(INTR_VBLANK, LINK_CABLE_MULTIBOOT_ASYNC_ISR_VBLANK);
-//       interrupt_add(INTR_SERIAL, LINK_CABLE_MULTIBOOT_ASYNC_ISR_SERIAL);
-//       bool success = linkCableMultibootAsync->sendRom(romBytes, romLength);
-//       if (success) {
-//         // (monitor `playerCount()` and `getPercentage()`)
-//         if (!linkCableMultibootAsync->isSending()) {
-//           auto result = linkCableMultibootAsync->getResult();
-//           // `result` should be
-//           // LinkCableMultiboot::Async::GeneralResult::SUCCESS
-//         }
-//       }
-// --------------------------------------------------------------------------
-// considerations:
-// - stop DMA before sending the ROM! (you might need to stop your audio player)
-// - this restriction only applies to the sync version!
-// --------------------------------------------------------------------------
+#include <gba_base.h>
 
-#ifndef LINK_DEVELOPMENT
-#pragma GCC system_header
-#endif
-
-#include "_link_common.hpp"
-
-#ifndef LINK_CABLE_MULTIBOOT_PALETTE_DATA
-/**
- * @brief Palette data (controls how the logo is displayed).
- * Format: 0b1CCCDSS1, where C=color, D=direction, S=speed.
- * Default: 0b10010011
- */
 #define LINK_CABLE_MULTIBOOT_PALETTE_DATA 0b10010011
-#endif
 
-LINK_VERSION_TAG LINK_CABLE_MULTIBOOT_VERSION = "vLinkCableMultiboot/v8.0.3";
+inline vu16& _REG_RCNT = *reinterpret_cast<vu16*>(0x04000000 + 0x0134);
+inline vu16& _REG_SIOCNT = *reinterpret_cast<vu16*>(0x04000000 + 0x0128);
+inline vu16& _REG_SIOMLT_SEND = *reinterpret_cast<vu16*>(0x04000000 + 0x012A);
+inline vu16* const _REG_SIOMULTI = reinterpret_cast<vu16*>(0x04000000 + 0x0120);
+inline vu16& _REG_VCOUNT = *reinterpret_cast<vu16*>(0x04000000 + 0x0006);
 
-#define LINK_CABLE_MULTIBOOT_TRY(CALL)                  \
-  partialResult = CALL;                                 \
-  if (partialResult == PartialResult::ABORTED)          \
-    return error(Result::CANCELED);                     \
-  else if (partialResult == PartialResult::NEEDS_RETRY) \
-    goto retry;
+inline u32 randomSeed = 123;
 
-/**
- * @brief A Multiboot tool to send small programs from one GBA to up to 3
- * slaves.
- */
+static inline int _qran() {
+  randomSeed = 1664525 * randomSeed + 1013904223;
+  return (randomSeed >> 16) & 0x7FFF;
+}
+
+static inline int _qran_range(int min, int max) {
+  return (_qran() * (max - min) >> 15) + min;
+}
+
+static inline void wait(u32 verticalLines) {
+  u32 count = 0;
+  u32 vCount = _REG_VCOUNT;
+
+  while (count < verticalLines) {
+    if (_REG_VCOUNT != vCount) {
+      count++;
+      vCount = _REG_VCOUNT;
+    }
+  };
+}
+
+typedef struct {
+  u32 reserved1[5];
+  u8 handshake_data;
+  u8 padding;
+  u16 handshake_timeout;
+  u8 probe_count;
+  u8 client_data[3];
+  u8 palette_data;
+  u8 response_bit;
+  u8 client_bit;
+  u8 reserved2;
+  u8* boot_srcp;
+  u8* boot_endp;
+  u8* masterp;
+  u8* reserved3[3];
+  u32 system_work2[4];
+  u8 sendflag;
+  u8 probe_target_bit;
+  u8 check_wait;
+  u8 server_type;
+} _MultiBootParam;
+
+#define LINK_INLINE inline __attribute__((always_inline))
+static LINK_INLINE auto _MultiBoot(const _MultiBootParam* param,
+                                   u32 mbmode) noexcept {
+  register union {
+    const _MultiBootParam* ptr;
+    int res;
+  } r0 asm("r0") = {param};
+  register auto r1 asm("r1") = mbmode;
+  asm volatile inline("swi 0x25 << ((1f - . == 4) * -16); 1:"
+                      : "+r"(r0), "+r"(r1)::"r3");
+  return r0.res;
+}
+
 class LinkCableMultiboot {
  private:
-  using u32 = Link::u32;
-  using u16 = Link::u16;
-  using u8 = Link::u8;
-  using vu32 = Link::vu32;
-  using vu8 = Link::vu8;
-
   static constexpr int MIN_ROM_SIZE = 0x100 + 0xC0;
   static constexpr int MAX_ROM_SIZE = 256 * 1024;
   static constexpr int FRAME_LINES = 228;
@@ -97,116 +92,54 @@ class LinkCableMultiboot {
   static constexpr int HEADER_SIZE = 0xC0;
   static constexpr int HEADER_PARTS = HEADER_SIZE / 2;
 
+ public:
+  static bool sendRom(const u8* rom, u32 romSize) {
+    while (true) {
+      stop();
+
+      // (*) instead of 1/16s, waiting a random number of frames works better
+      wait(INITIAL_WAIT_MIN_LINES +
+                 FRAME_LINES *
+                     _qran_range(1, INITIAL_WAIT_MAX_RANDOM_FRAMES));
+
+      // 1. Prepare a "Multiboot Parameter Structure" in RAM.
+      _MultiBootParam multiBootParameters;
+      multiBootParameters.client_data[0] = CLIENT_NO_DATA;
+      multiBootParameters.client_data[1] = CLIENT_NO_DATA;
+      multiBootParameters.client_data[2] = CLIENT_NO_DATA;
+      multiBootParameters.palette_data = LINK_CABLE_MULTIBOOT_PALETTE_DATA;
+      multiBootParameters.client_bit = 0;
+      multiBootParameters.boot_srcp = (u8*)rom + HEADER_SIZE;
+      multiBootParameters.boot_endp = (u8*)rom + romSize;
+
+      if (detectClients(multiBootParameters) &&
+          sendHeader(multiBootParameters, rom) &&
+          sendPalette(multiBootParameters) &&
+          confirmHandshakeData(multiBootParameters)) {
+        int result = _MultiBoot(&multiBootParameters, 1);
+        stop();
+        return result == 0;
+      }
+    }
+  }
+
+ private:
   struct Response {
     u32 data[4];
     int playerId = -1;  // (-1 = unknown)
   };
 
- public:
-  enum class Result {
-    SUCCESS,
-    UNALIGNED,
-    INVALID_SIZE,
-    CANCELED,
-    FAILURE_DURING_TRANSFER
-  };
-
-  enum class TransferMode {
-    SPI = 0,
-    MULTI_PLAY = 1
-  };  // (used in SWI call, do not swap)
-
-  /**
-   * @brief Sends the `rom`. Once completed, the return value should be
-   * `LinkCableMultiboot::Result::SUCCESS`.
-   * @param rom A pointer to ROM data. Must be 4-byte aligned.
-   * @param romSize Size of the ROM in bytes. It must be a number between
-   * `448` and `262144`, and a multiple of `16`.
-   * @param cancel A function that will be continuously invoked. If it
-   * returns `true`, the transfer will be aborted.
-   * @param mode Either `TransferMode::MULTI_PLAY` for GBA cable (default
-   * value) or `TransferMode::SPI` for GBC cable.
-   * \warning Blocks the system until completion or cancellation.
-   */
-  Result sendRom(const u8* rom,
-                 u32 romSize) {
-    LINK_READ_TAG(LINK_CABLE_MULTIBOOT_VERSION);
-
-    if ((u32)rom % 4 != 0)
-      return Result::UNALIGNED;
-    if (romSize < MIN_ROM_SIZE || romSize > MAX_ROM_SIZE ||
-        (romSize % 0x10) != 0)
-      return Result::INVALID_SIZE;
-
-  retry:
-    stop();
-
-    // (*) instead of 1/16s, waiting a random number of frames works better
-    Link::wait(INITIAL_WAIT_MIN_LINES +
-               FRAME_LINES *
-                   Link::_qran_range(1, INITIAL_WAIT_MAX_RANDOM_FRAMES));
-
-    // 1. Prepare a "Multiboot Parameter Structure" in RAM.
-    PartialResult partialResult = PartialResult::NEEDS_RETRY;
-    Link::_MultiBootParam multiBootParameters;
-    multiBootParameters.client_data[0] = CLIENT_NO_DATA;
-    multiBootParameters.client_data[1] = CLIENT_NO_DATA;
-    multiBootParameters.client_data[2] = CLIENT_NO_DATA;
-    multiBootParameters.palette_data = LINK_CABLE_MULTIBOOT_PALETTE_DATA;
-    multiBootParameters.client_bit = 0;
-    multiBootParameters.boot_srcp = (u8*)rom + HEADER_SIZE;
-    multiBootParameters.boot_endp = (u8*)rom + romSize;
-
-    LINK_CABLE_MULTIBOOT_TRY(detectClients(multiBootParameters))
-    LINK_CABLE_MULTIBOOT_TRY(sendHeader(multiBootParameters, rom))
-    LINK_CABLE_MULTIBOOT_TRY(sendPalette(multiBootParameters))
-    LINK_CABLE_MULTIBOOT_TRY(confirmHandshakeData(multiBootParameters))
-
-    // 9. Call SWI 0x25, with r0 set to the address of the multiboot parameter
-    // structure and r1 set to the communication mode (0 for normal, 1 for
-    // MultiPlay).
-    int result = Link::_MultiBoot(&multiBootParameters, (int)TransferMode::MULTI_PLAY);
-
-    stop();
-
-    // 10. Upon return, r0 will be either 0 for success, or 1 for failure. If
-    // successful, all clients have received the multiboot program successfully
-    // and are now executing it - you can begin either further data transfer or
-    // a multiplayer game from here.
-    return result == 1 ? Result::FAILURE_DURING_TRANSFER : Result::SUCCESS;
-  }
-
- private:
-  enum class PartialResult { NEEDS_RETRY, FINISHED, ABORTED };
-
-  /**
-   * @brief Exchanges `data` with the connected consoles. Returns the received
-   * data from each player, including the assigned player ID.
-   * @param data The value to be sent.
-   * @param cancel A function that will be continuously invoked. If it returns
-   * `true`, the transfer will be aborted and the response will be empty.
-   * \warning Blocks the system until completion or cancellation.
-   */
-  Response transfer(u16 data) {
-    setData(data);
+  static Response transfer(u16 data) {
+    _REG_SIOMLT_SEND = data;
     startTransfer();
     while (isSending()) {}
-    if (allReady() && !hasError())
-      return getData();
-    return EMPTY_RESPONSE;
-  }
+    if (!allReady() || hasError())
+      return Response{{0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}, -1};
 
-  static constexpr Response EMPTY_RESPONSE = {{0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}, -1};
-
-  static void setData(u16 data) { Link::_REG_SIOMLT_SEND = data; }
-
-  [[nodiscard]] static Response getData() {
-    Response response = EMPTY_RESPONSE;
-
+    Response response;
     for (u32 i = 0; i < 4; i++)
-      response.data[i] = Link::_REG_SIOMULTI[i];
-
-    response.playerId = (Link::_REG_SIOCNT & (0b11 << 4)) >> 4;
+      response.data[i] = _REG_SIOMULTI[i];
+    response.playerId = (_REG_SIOCNT & (0b11 << 4)) >> 4;
 
     return response;
   }
@@ -215,10 +148,10 @@ class LinkCableMultiboot {
   [[nodiscard]] static bool allReady() { return isBitHigh(3); }
   [[nodiscard]] static bool hasError() { return isBitHigh(6); }
   [[nodiscard]] static bool isSending() { return isBitHigh(7); }
-  static bool isBitHigh(u8 bit) { return (Link::_REG_SIOCNT >> bit) & 1; }
-  static void setBitHigh(u8 bit) { Link::_REG_SIOCNT |= 1 << bit; }
+  static bool isBitHigh(u8 bit) { return (_REG_SIOCNT >> bit) & 1; }
+  static void setBitHigh(u8 bit) { _REG_SIOCNT |= 1 << bit; }
 
-  PartialResult detectClients(Link::_MultiBootParam& multiBootParameters) {
+  static bool detectClients(_MultiBootParam& multiBootParameters) {
     // 2. Initiate a multiplayer communication session, using either Normal mode
     // for a single client or MultiPlay mode for multiple clients.
     start();
@@ -249,7 +182,7 @@ class LinkCableMultiboot {
     }
 
     if (!success)
-      return PartialResult::NEEDS_RETRY;
+      return false;
 
     // 4. Fill in client_bit in the multiboot parameter structure (with
     // bits 1-3 set according to which clients responded). Send the word
@@ -260,13 +193,12 @@ class LinkCableMultiboot {
     // The clients should respond 0x7200.
     if (!isResponseSameAsValueWithClientBit(
             response, multiBootParameters.client_bit, ACK_HANDSHAKE))
-      return PartialResult::NEEDS_RETRY;
+      return false;
 
-    return PartialResult::FINISHED;
+    return true;
   }
 
-  PartialResult sendHeader(Link::_MultiBootParam& multiBootParameters,
-                           const u8* rom) {
+  static bool sendHeader(_MultiBootParam& multiBootParameters, const u8* rom) {
     // 5. Send the cartridge header, 16 bits at a time, in little endian order.
     // After each 16-bit send, the clients will respond with 0xNN0X, where NN is
     // the number of words remaining and X is the client number. (Note that if
@@ -278,7 +210,7 @@ class LinkCableMultiboot {
       auto response = transfer(*(headerOut++));
       if (!isResponseSameAsValueWithClientBit(
               response, multiBootParameters.client_bit, remaining << 8))
-        return PartialResult::NEEDS_RETRY;
+        return false;
 
       remaining--;
     }
@@ -289,16 +221,16 @@ class LinkCableMultiboot {
     response = transfer(CMD_HANDSHAKE);
     if (!isResponseSameAsValueWithClientBit(response,
                                             multiBootParameters.client_bit, 0))
-      return PartialResult::NEEDS_RETRY;
+      return false;
     response = transfer(CMD_HANDSHAKE | multiBootParameters.client_bit);
     if (!isResponseSameAsValueWithClientBit(
             response, multiBootParameters.client_bit, ACK_HANDSHAKE))
-      return PartialResult::NEEDS_RETRY;
+      return false;
 
-    return PartialResult::FINISHED;
+    return true;
   }
 
-  PartialResult sendPalette(Link::_MultiBootParam& multiBootParameters) {
+  static bool sendPalette(_MultiBootParam& multiBootParameters) {
     // 7. Send 0x63PP repeatedly, where PP is the palette_data you have picked
     // earlier. Do this until the clients respond with 0x73CC, where CC is a
     // random byte. Store these bytes in client_data in the parameter structure.
@@ -326,13 +258,10 @@ class LinkCableMultiboot {
         break;
     }
 
-    if (!success)
-      return PartialResult::NEEDS_RETRY;
-
-    return PartialResult::FINISHED;
+    return success;
   }
 
-  PartialResult confirmHandshakeData(Link::_MultiBootParam& multiBootParameters) {
+  static bool confirmHandshakeData(_MultiBootParam& multiBootParameters) {
     // 8. Calculate the handshake_data byte and store it in the parameter
     // structure. This should be calculated as 0x11 + the sum of the three
     // client_data bytes. Send 0x64HH, where HH is the handshake_data.
@@ -345,27 +274,19 @@ class LinkCableMultiboot {
 
     u16 data = CMD_CONFIRM_HANDSHAKE_DATA | multiBootParameters.handshake_data;
     auto response = transfer(data);
-    if (!isResponseSameAsValue(response, multiBootParameters.client_bit,
-                               ACK_RESPONSE, ACK_RESPONSE_MASK))
-      return PartialResult::NEEDS_RETRY;
-
-    return PartialResult::FINISHED;
+    return isResponseSameAsValue(response, multiBootParameters.client_bit,
+                                 ACK_RESPONSE, ACK_RESPONSE_MASK);
   }
 
-  void start() {
-    Link::_REG_RCNT         = 0x0000;
-    Link::_REG_SIOMLT_SEND  = 0x0000;
-    Link::_REG_SIOCNT       = 0x2003;
+  static void start() {
+    _REG_RCNT         = 0x0000;
+    _REG_SIOMLT_SEND  = 0x0000;
+    _REG_SIOCNT       = 0x2003;
   }
 
-  void stop() {
-    Link::_REG_SIOMLT_SEND = 0;
-    Link::_REG_RCNT = (Link::_REG_RCNT & ~(1 << 14)) | (1 << 15);
-  }
-
-  Result error(Result error) {
-    stop();
-    return error;
+  static void stop() {
+    _REG_SIOMLT_SEND = 0;
+    _REG_RCNT = (_REG_RCNT & ~(1 << 14)) | (1 << 15);
   }
 
   static bool isResponseSameAsValue(Response response,
@@ -412,7 +333,5 @@ class LinkCableMultiboot {
     return count > 0;
   }
 };
-
-extern LinkCableMultiboot* linkCableMultiboot;
 
 #endif  // LINK_CABLE_MULTIBOOT_H
