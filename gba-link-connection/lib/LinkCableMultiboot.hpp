@@ -44,7 +44,7 @@
 #pragma GCC system_header
 #endif
 
-#include "LinkRawCable.hpp"
+#include "_link_common.hpp"
 
 #ifndef LINK_CABLE_MULTIBOOT_PALETTE_DATA
 /**
@@ -53,16 +53,6 @@
  * Default: 0b10010011
  */
 #define LINK_CABLE_MULTIBOOT_PALETTE_DATA 0b10010011
-#endif
-
-#ifndef LINK_CABLE_MULTIBOOT_ASYNC_DISABLE_NESTED_IRQ
-/**
- * @brief Disable nested IRQs (uncomment to enable).
- * In the async version, SERIAL IRQs can be interrupted (once they clear their
- * time-critical needs) by default, which helps prevent issues with audio
- * engines. However, if something goes wrong, you can disable this behavior.
- */
-// #define LINK_CABLE_MULTIBOOT_ASYNC_DISABLE_NESTED_IRQ
 #endif
 
 LINK_VERSION_TAG LINK_CABLE_MULTIBOOT_VERSION = "vLinkCableMultiboot/v8.0.3";
@@ -106,10 +96,9 @@ class LinkCableMultiboot {
   static constexpr int ACK_RESPONSE_MASK = 0xFF00;
   static constexpr int HEADER_SIZE = 0xC0;
   static constexpr int HEADER_PARTS = HEADER_SIZE / 2;
-  static constexpr auto MAX_BAUD_RATE = LinkRawCable::BaudRate::BAUD_RATE_3;
 
   struct Response {
-    u32 data[LINK_RAW_CABLE_MAX_PLAYERS];
+    u32 data[4];
     int playerId = -1;  // (-1 = unknown)
   };
 
@@ -139,11 +128,8 @@ class LinkCableMultiboot {
    * value) or `TransferMode::SPI` for GBC cable.
    * \warning Blocks the system until completion or cancellation.
    */
-  template <typename F>
   Result sendRom(const u8* rom,
-                 u32 romSize,
-                 F cancel,
-                 TransferMode mode = TransferMode::MULTI_PLAY) {
+                 u32 romSize) {
     LINK_READ_TAG(LINK_CABLE_MULTIBOOT_VERSION);
 
     if ((u32)rom % 4 != 0)
@@ -171,10 +157,10 @@ class LinkCableMultiboot {
     multiBootParameters.boot_srcp = (u8*)rom + HEADER_SIZE;
     multiBootParameters.boot_endp = (u8*)rom + romSize;
 
-    LINK_CABLE_MULTIBOOT_TRY(detectClients(multiBootParameters, cancel))
-    LINK_CABLE_MULTIBOOT_TRY(sendHeader(multiBootParameters, rom, cancel))
-    LINK_CABLE_MULTIBOOT_TRY(sendPalette(multiBootParameters, cancel))
-    LINK_CABLE_MULTIBOOT_TRY(confirmHandshakeData(multiBootParameters, cancel))
+    LINK_CABLE_MULTIBOOT_TRY(detectClients(multiBootParameters))
+    LINK_CABLE_MULTIBOOT_TRY(sendHeader(multiBootParameters, rom))
+    LINK_CABLE_MULTIBOOT_TRY(sendPalette(multiBootParameters))
+    LINK_CABLE_MULTIBOOT_TRY(confirmHandshakeData(multiBootParameters))
 
     // 9. Call SWI 0x25, with r0 set to the address of the multiboot parameter
     // structure and r1 set to the communication mode (0 for normal, 1 for
@@ -191,13 +177,48 @@ class LinkCableMultiboot {
   }
 
  private:
-  LinkRawCable linkRawCable;
-
   enum class PartialResult { NEEDS_RETRY, FINISHED, ABORTED };
 
-  template <typename F>
-  PartialResult detectClients(Link::_MultiBootParam& multiBootParameters,
-                              F cancel) {
+  /**
+   * @brief Exchanges `data` with the connected consoles. Returns the received
+   * data from each player, including the assigned player ID.
+   * @param data The value to be sent.
+   * @param cancel A function that will be continuously invoked. If it returns
+   * `true`, the transfer will be aborted and the response will be empty.
+   * \warning Blocks the system until completion or cancellation.
+   */
+  Response transfer(u16 data) {
+    setData(data);
+    startTransfer();
+    while (isSending()) {}
+    if (allReady() && !hasError())
+      return getData();
+    return EMPTY_RESPONSE;
+  }
+
+  static constexpr Response EMPTY_RESPONSE = {{0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}, -1};
+
+  static void setData(u16 data) { Link::_REG_SIOMLT_SEND = data; }
+
+  [[nodiscard]] static Response getData() {
+    Response response = EMPTY_RESPONSE;
+
+    for (u32 i = 0; i < 4; i++)
+      response.data[i] = Link::_REG_SIOMULTI[i];
+
+    response.playerId = (Link::_REG_SIOCNT & (0b11 << 4)) >> 4;
+
+    return response;
+  }
+
+  static void startTransfer() { setBitHigh(7); }
+  [[nodiscard]] static bool allReady() { return isBitHigh(3); }
+  [[nodiscard]] static bool hasError() { return isBitHigh(6); }
+  [[nodiscard]] static bool isSending() { return isBitHigh(7); }
+  static bool isBitHigh(u8 bit) { return (Link::_REG_SIOCNT >> bit) & 1; }
+  static void setBitHigh(u8 bit) { Link::_REG_SIOCNT |= 1 << bit; }
+
+  PartialResult detectClients(Link::_MultiBootParam& multiBootParameters) {
     // 2. Initiate a multiplayer communication session, using either Normal mode
     // for a single client or MultiPlay mode for multiple clients.
     start();
@@ -207,10 +228,7 @@ class LinkCableMultiboot {
     // this after 16 tries, delay 1/16s and go back to step 2. (*)
     bool success = false;
     for (u32 t = 0; t < DETECTION_TRIES; t++) {
-      auto response = transfer(CMD_HANDSHAKE, cancel);
-      if (cancel())
-        return PartialResult::ABORTED;
-
+      auto response = transfer(CMD_HANDSHAKE);
       multiBootParameters.client_bit = 0;
 
       success =
@@ -237,7 +255,7 @@ class LinkCableMultiboot {
     // bits 1-3 set according to which clients responded). Send the word
     // 0x610Y, where Y is that same set of set bits.
     auto response =
-        transfer(CMD_CONFIRM_CLIENTS | multiBootParameters.client_bit, cancel);
+        transfer(CMD_CONFIRM_CLIENTS | multiBootParameters.client_bit);
 
     // The clients should respond 0x7200.
     if (!isResponseSameAsValueWithClientBit(
@@ -247,10 +265,8 @@ class LinkCableMultiboot {
     return PartialResult::FINISHED;
   }
 
-  template <typename F>
   PartialResult sendHeader(Link::_MultiBootParam& multiBootParameters,
-                           const u8* rom,
-                           F cancel) {
+                           const u8* rom) {
     // 5. Send the cartridge header, 16 bits at a time, in little endian order.
     // After each 16-bit send, the clients will respond with 0xNN0X, where NN is
     // the number of words remaining and X is the client number. (Note that if
@@ -259,10 +275,7 @@ class LinkCableMultiboot {
     u16* headerOut = (u16*)rom;
     u32 remaining = HEADER_PARTS;
     while (remaining > 0) {
-      auto response = transfer(*(headerOut++), cancel);
-      if (cancel())
-        return PartialResult::ABORTED;
-
+      auto response = transfer(*(headerOut++));
       if (!isResponseSameAsValueWithClientBit(
               response, multiBootParameters.client_bit, remaining << 8))
         return PartialResult::NEEDS_RETRY;
@@ -273,15 +286,11 @@ class LinkCableMultiboot {
     // 6. Send 0x6200, followed by 0x620Y again.
     // The clients should respond 0x000Y and 0x720Y.
     Response response;
-    response = transfer(CMD_HANDSHAKE, cancel);
-    if (cancel())
-      return PartialResult::ABORTED;
+    response = transfer(CMD_HANDSHAKE);
     if (!isResponseSameAsValueWithClientBit(response,
                                             multiBootParameters.client_bit, 0))
       return PartialResult::NEEDS_RETRY;
-    response = transfer(CMD_HANDSHAKE | multiBootParameters.client_bit, cancel);
-    if (cancel())
-      return PartialResult::ABORTED;
+    response = transfer(CMD_HANDSHAKE | multiBootParameters.client_bit);
     if (!isResponseSameAsValueWithClientBit(
             response, multiBootParameters.client_bit, ACK_HANDSHAKE))
       return PartialResult::NEEDS_RETRY;
@@ -289,9 +298,7 @@ class LinkCableMultiboot {
     return PartialResult::FINISHED;
   }
 
-  template <typename F>
-  PartialResult sendPalette(Link::_MultiBootParam& multiBootParameters,
-                            F cancel) {
+  PartialResult sendPalette(Link::_MultiBootParam& multiBootParameters) {
     // 7. Send 0x63PP repeatedly, where PP is the palette_data you have picked
     // earlier. Do this until the clients respond with 0x73CC, where CC is a
     // random byte. Store these bytes in client_data in the parameter structure.
@@ -299,10 +306,7 @@ class LinkCableMultiboot {
 
     bool success = false;
     for (u32 i = 0; i < DETECTION_TRIES; i++) {
-      auto response = transfer(data, cancel);
-      if (cancel())
-        return PartialResult::ABORTED;
-
+      auto response = transfer(data);
       u8 sendMask = multiBootParameters.client_bit;
       success = validateResponse(
                     response,
@@ -328,9 +332,7 @@ class LinkCableMultiboot {
     return PartialResult::FINISHED;
   }
 
-  template <typename F>
-  PartialResult confirmHandshakeData(Link::_MultiBootParam& multiBootParameters,
-                                     F cancel) {
+  PartialResult confirmHandshakeData(Link::_MultiBootParam& multiBootParameters) {
     // 8. Calculate the handshake_data byte and store it in the parameter
     // structure. This should be calculated as 0x11 + the sum of the three
     // client_data bytes. Send 0x64HH, where HH is the handshake_data.
@@ -342,9 +344,7 @@ class LinkCableMultiboot {
         256;
 
     u16 data = CMD_CONFIRM_HANDSHAKE_DATA | multiBootParameters.handshake_data;
-    auto response = transfer(data, cancel);
-    if (cancel())
-      return PartialResult::ABORTED;
+    auto response = transfer(data);
     if (!isResponseSameAsValue(response, multiBootParameters.client_bit,
                                ACK_RESPONSE, ACK_RESPONSE_MASK))
       return PartialResult::NEEDS_RETRY;
@@ -352,22 +352,15 @@ class LinkCableMultiboot {
     return PartialResult::FINISHED;
   }
 
-  template <typename F>
-  Response transfer(u32 data, F cancel) {
-    Response response;
-    auto response16bit = linkRawCable.transfer(data, cancel);
-    for (u32 i = 0; i < LINK_RAW_CABLE_MAX_PLAYERS; i++)
-      response.data[i] = response16bit.data[i];
-    response.playerId = response16bit.playerId;
-    return response;
-  }
-
   void start() {
-    linkRawCable.activate(MAX_BAUD_RATE);
+    Link::_REG_RCNT         = 0x0000;
+    Link::_REG_SIOMLT_SEND  = 0x0000;
+    Link::_REG_SIOCNT       = 0x2003;
   }
 
   void stop() {
-    linkRawCable.deactivate();
+    Link::_REG_SIOMLT_SEND = 0;
+    Link::_REG_RCNT = (Link::_REG_RCNT & ~(1 << 14)) | (1 << 15);
   }
 
   Result error(Result error) {
@@ -405,7 +398,7 @@ class LinkCableMultiboot {
     u32 count = 0;
     for (u32 i = 0; i < MAX_CLIENTS; i++) {
       u32 value = response.data[1 + i];
-      if (value == LINK_RAW_CABLE_DISCONNECTED) {
+      if (value == 0xFFFF) {
         // Note that throughout this process, any clients that are not
         // connected will always respond with 0xFFFF - be sure to ignore them.
         continue;

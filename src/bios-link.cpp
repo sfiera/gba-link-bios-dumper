@@ -63,7 +63,7 @@ IWRAM_DATA LinkCableMultiboot* linkCableMultiboot;
 LinkCableMultiboot::Result send_rom() {
     u32 size = (bios_dumper_gba_size + 0xF) & ~0xF;
     iprintf("Sending %ld bytes\n", size);
-    return linkCableMultiboot->sendRom(bios_dumper_gba, size, [](){ return false; });
+    return linkCableMultiboot->sendRom(bios_dumper_gba, size);
 }
 
 bool recv_bios() {
