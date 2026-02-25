@@ -22,7 +22,7 @@ IWRAM_DATA u8 out[0x4000];
 
 #define LINK_CABLE_MULTIBOOT_PALETTE_DATA 0b10010011
 
-inline u32 randomSeed = 123;
+static u32 randomSeed = 123;
 
 inline int _qran() {
   randomSeed = 1664525 * randomSeed + 1013904223;
@@ -68,36 +68,36 @@ typedef struct {
 } _MultiBootParam;
 
 #define LINK_INLINE inline __attribute__((always_inline))
-LINK_INLINE auto _MultiBoot(const _MultiBootParam* param,
-                                   u32 mbmode) noexcept {
+LINK_INLINE s32 _MultiBoot(const _MultiBootParam* param,
+                                   u32 mbmode) {
   register union {
     const _MultiBootParam* ptr;
-    int res;
+    s32 res;
   } r0 asm("r0") = {param};
-  register auto r1 asm("r1") = mbmode;
+  register u32 r1 asm("r1") = mbmode;
   asm volatile inline("swi 0x25 << ((1f - . == 4) * -16); 1:"
                       : "+r"(r0), "+r"(r1)::"r3");
   return r0.res;
 }
 
-constexpr int FRAME_LINES = 228;
-constexpr int INITIAL_WAIT_MIN_FRAMES = 4;
-constexpr int INITIAL_WAIT_MAX_RANDOM_FRAMES = 10;
-constexpr int INITIAL_WAIT_MIN_LINES =
+static const int FRAME_LINES = 228;
+static const int INITIAL_WAIT_MIN_FRAMES = 4;
+static const int INITIAL_WAIT_MAX_RANDOM_FRAMES = 10;
+static const int INITIAL_WAIT_MIN_LINES =
     FRAME_LINES * INITIAL_WAIT_MIN_FRAMES;
-constexpr int DETECTION_TRIES = 16;
-constexpr int MAX_CLIENTS = 3;
-constexpr int CLIENT_NO_DATA = 0xFF;
-constexpr int CMD_HANDSHAKE = 0x6200;
-constexpr int ACK_HANDSHAKE = 0x7200;
-constexpr int CMD_CONFIRM_CLIENTS = 0x6100;
-constexpr int CMD_SEND_PALETTE = 0x6300;
-constexpr int HANDSHAKE_DATA = 0x11;
-constexpr int CMD_CONFIRM_HANDSHAKE_DATA = 0x6400;
-constexpr int ACK_RESPONSE = 0x7300;
-constexpr int ACK_RESPONSE_MASK = 0xFF00;
-constexpr int HEADER_SIZE = 0xC0;
-constexpr int HEADER_PARTS = HEADER_SIZE / 2;
+static const int DETECTION_TRIES = 16;
+static const int MAX_CLIENTS = 3;
+static const int CLIENT_NO_DATA = 0xFF;
+static const int CMD_HANDSHAKE = 0x6200;
+static const int ACK_HANDSHAKE = 0x7200;
+static const int CMD_CONFIRM_CLIENTS = 0x6100;
+static const int CMD_SEND_PALETTE = 0x6300;
+static const int HANDSHAKE_DATA = 0x11;
+static const int CMD_CONFIRM_HANDSHAKE_DATA = 0x6400;
+static const int ACK_RESPONSE = 0x7300;
+static const int ACK_RESPONSE_MASK = 0xFF00;
+static const int HEADER_SIZE = 0xC0;
+static const int HEADER_PARTS = HEADER_SIZE / 2;
 
 void start() {
   *REG_RCNT         = 0x0000;
@@ -117,19 +117,19 @@ void startTransfer() { setBitHigh(7); }
 [[nodiscard]] bool hasError() { return isBitHigh(6); }
 [[nodiscard]] bool isSending() { return isBitHigh(7); }
 
-struct Response {
+typedef struct {
   u32 data[4];
-  int playerId = -1;  // (-1 = unknown)
-};
+  int playerId;  // (-1 = unknown)
+} Response;
 
 Response transfer(u16 data) {
   *REG_SIOMLT_SEND = data;
   startTransfer();
   while (isSending()) {}
+  Response response = {{0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}, -1};
   if (!allReady() || hasError())
-    return Response{{0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}, -1};
+    return response;
 
-  Response response;
   for (u32 i = 0; i < 4; i++)
     response.data[i] = REG_SIOMULTI[i];
   response.playerId = (*REG_SIOCNT & (0b11 << 4)) >> 4;
@@ -159,7 +159,7 @@ bool validateResponse(Response response, F check) {
 bool isResponseSameAsValue(Response response,
                                   u8 clientMask,
                                   u16 wantedValue,
-                                  u16 mask = 0xFFFF) {
+                                  u16 mask) {
   return validateResponse(
       response, [&clientMask, &wantedValue, &mask](u32 i, u32 value) {
         u8 clientBit = 1 << (i + 1);
@@ -169,20 +169,20 @@ bool isResponseSameAsValue(Response response,
       });
 }
 
-bool confirmHandshakeData(_MultiBootParam& multiBootParameters) {
+bool confirmHandshakeData(_MultiBootParam* multiBootParameters) {
   // 8. Calculate the handshake_data byte and store it in the parameter
   // structure. This should be calculated as 0x11 + the sum of the three
   // client_data bytes. Send 0x64HH, where HH is the handshake_data.
   // The clients should respond 0x77GG, where GG is something unimportant.
-  multiBootParameters.handshake_data =
-      (HANDSHAKE_DATA + multiBootParameters.client_data[0] +
-       multiBootParameters.client_data[1] +
-       multiBootParameters.client_data[2]) %
+  multiBootParameters->handshake_data =
+      (HANDSHAKE_DATA + multiBootParameters->client_data[0] +
+       multiBootParameters->client_data[1] +
+       multiBootParameters->client_data[2]) %
       256;
 
-  u16 data = CMD_CONFIRM_HANDSHAKE_DATA | multiBootParameters.handshake_data;
-  auto response = transfer(data);
-  return isResponseSameAsValue(response, multiBootParameters.client_bit,
+  u16 data = CMD_CONFIRM_HANDSHAKE_DATA | multiBootParameters->handshake_data;
+  Response response = transfer(data);
+  return isResponseSameAsValue(response, multiBootParameters->client_bit,
                                ACK_RESPONSE, ACK_RESPONSE_MASK);
 }
 
@@ -198,7 +198,7 @@ bool isResponseSameAsValueWithClientBit(Response response,
       });
 }
 
-bool detectClients(_MultiBootParam& multiBootParameters) {
+bool detectClients(_MultiBootParam* multiBootParameters) {
   // 2. Initiate a multiplayer communication session, using either Normal mode
   // for a single client or MultiPlay mode for multiple clients.
   start();
@@ -208,8 +208,8 @@ bool detectClients(_MultiBootParam& multiBootParameters) {
   // this after 16 tries, delay 1/16s and go back to step 2. (*)
   bool success = false;
   for (u32 t = 0; t < DETECTION_TRIES; t++) {
-    auto response = transfer(CMD_HANDSHAKE);
-    multiBootParameters.client_bit = 0;
+    Response response = transfer(CMD_HANDSHAKE);
+    multiBootParameters->client_bit = 0;
 
     success =
         validateResponse(response, [&multiBootParameters](u32 i, u16 value) {
@@ -217,7 +217,7 @@ bool detectClients(_MultiBootParam& multiBootParameters) {
             u8 clientId = value & 0xF;
             u8 expectedClientId = 1 << (i + 1);
             if (clientId == expectedClientId) {
-              multiBootParameters.client_bit |= clientId;
+              multiBootParameters->client_bit |= clientId;
               return true;
             }
           }
@@ -234,18 +234,18 @@ bool detectClients(_MultiBootParam& multiBootParameters) {
   // 4. Fill in client_bit in the multiboot parameter structure (with
   // bits 1-3 set according to which clients responded). Send the word
   // 0x610Y, where Y is that same set of set bits.
-  auto response =
-      transfer(CMD_CONFIRM_CLIENTS | multiBootParameters.client_bit);
+  Response response =
+      transfer(CMD_CONFIRM_CLIENTS | multiBootParameters->client_bit);
 
   // The clients should respond 0x7200.
   if (!isResponseSameAsValueWithClientBit(
-          response, multiBootParameters.client_bit, ACK_HANDSHAKE))
+          response, multiBootParameters->client_bit, ACK_HANDSHAKE))
     return false;
 
   return true;
 }
 
-bool sendHeader(_MultiBootParam& multiBootParameters, const u8* rom) {
+bool sendHeader(_MultiBootParam* multiBootParameters, const u8* rom) {
   // 5. Send the cartridge header, 16 bits at a time, in little endian order.
   // After each 16-bit send, the clients will respond with 0xNN0X, where NN is
   // the number of words remaining and X is the client number. (Note that if
@@ -254,9 +254,9 @@ bool sendHeader(_MultiBootParam& multiBootParameters, const u8* rom) {
   u16* headerOut = (u16*)rom;
   u32 remaining = HEADER_PARTS;
   while (remaining > 0) {
-    auto response = transfer(*(headerOut++));
+    Response response = transfer(*(headerOut++));
     if (!isResponseSameAsValueWithClientBit(
-            response, multiBootParameters.client_bit, remaining << 8))
+            response, multiBootParameters->client_bit, remaining << 8))
       return false;
 
     remaining--;
@@ -267,17 +267,17 @@ bool sendHeader(_MultiBootParam& multiBootParameters, const u8* rom) {
   Response response;
   response = transfer(CMD_HANDSHAKE);
   if (!isResponseSameAsValueWithClientBit(response,
-                                          multiBootParameters.client_bit, 0))
+                                          multiBootParameters->client_bit, 0))
     return false;
-  response = transfer(CMD_HANDSHAKE | multiBootParameters.client_bit);
+  response = transfer(CMD_HANDSHAKE | multiBootParameters->client_bit);
   if (!isResponseSameAsValueWithClientBit(
-          response, multiBootParameters.client_bit, ACK_HANDSHAKE))
+          response, multiBootParameters->client_bit, ACK_HANDSHAKE))
     return false;
 
   return true;
 }
 
-bool sendPalette(_MultiBootParam& multiBootParameters) {
+bool sendPalette(_MultiBootParam* multiBootParameters) {
   // 7. Send 0x63PP repeatedly, where PP is the palette_data you have picked
   // earlier. Do this until the clients respond with 0x73CC, where CC is a
   // random byte. Store these bytes in client_data in the parameter structure.
@@ -285,15 +285,15 @@ bool sendPalette(_MultiBootParam& multiBootParameters) {
 
   bool success = false;
   for (u32 i = 0; i < DETECTION_TRIES; i++) {
-    auto response = transfer(data);
-    u8 sendMask = multiBootParameters.client_bit;
+    Response response = transfer(data);
+    u8 sendMask = multiBootParameters->client_bit;
     success = validateResponse(
                   response,
                   [&multiBootParameters, &sendMask](u32 i, u16 value) {
                     u8 clientBit = 1 << (i + 1);
-                    if ((multiBootParameters.client_bit & clientBit) &&
+                    if ((multiBootParameters->client_bit & clientBit) &&
                         ((value & ACK_RESPONSE_MASK) == ACK_RESPONSE)) {
-                      multiBootParameters.client_data[i] = value & 0xFF;
+                      multiBootParameters->client_data[i] = value & 0xFF;
                       sendMask &= ~clientBit;
                       return true;
                     }
@@ -327,10 +327,10 @@ bool sendRom(const u8* rom, u32 romSize) {
     multiBootParameters.boot_srcp = (u8*)rom + HEADER_SIZE;
     multiBootParameters.boot_endp = (u8*)rom + romSize;
 
-    if (detectClients(multiBootParameters) &&
-        sendHeader(multiBootParameters, rom) &&
-        sendPalette(multiBootParameters) &&
-        confirmHandshakeData(multiBootParameters)) {
+    if (detectClients(&multiBootParameters) &&
+        sendHeader(&multiBootParameters, rom) &&
+        sendPalette(&multiBootParameters) &&
+        confirmHandshakeData(&multiBootParameters)) {
       int result = _MultiBoot(&multiBootParameters, 1);
       stop();
       return result == 0;
