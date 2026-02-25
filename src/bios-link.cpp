@@ -61,19 +61,9 @@ void calcSha256(void) {
 IWRAM_DATA LinkCableMultiboot* linkCableMultiboot;
 
 LinkCableMultiboot::Result send_rom() {
-    irqSet(IRQ_VBLANK, LINK_CABLE_MULTIBOOT_ASYNC_ISR_VBLANK);
-    irqEnable(IRQ_VBLANK);
-    irqSet(IRQ_SERIAL, LINK_CABLE_MULTIBOOT_ASYNC_ISR_SERIAL);
-    irqEnable(IRQ_SERIAL);
-
     u32 size = (bios_dumper_gba_size + 0xF) & ~0xF;
     iprintf("Sending %ld bytes\n", size);
-    LinkCableMultiboot::Result result = LinkCableMultiboot::Result::NONE;
-    if (!linkCableMultiboot->sendRom(bios_dumper_gba, size)) {
-        result = linkCableMultiboot->getDetailedResult();
-    }
-
-    return result;
+    return linkCableMultiboot->sendRom(bios_dumper_gba, size, [](){ return false; });
 }
 
 bool recv_bios() {
@@ -107,9 +97,7 @@ bool recv_bios() {
 }
 
 int main() {
-    int mb, pct;
     linkCableMultiboot = new LinkCableMultiboot;
-    irqInit();
 
 	consoleDemoInit();
 
@@ -123,37 +111,10 @@ int main() {
 	}
     
     LinkCableMultiboot::Result result = send_rom();
-    if (result != LinkCableMultiboot::Result::NONE) {
+    if (result != LinkCableMultiboot::Result::SUCCESS) {
         iprintf("Failed to send: %d\n", (int)result);
         goto wait;
     }
-    pct = 0;
-    while (linkCableMultiboot->isSending()) {
-        VBlankIntrWait();
-        if (linkCableMultiboot->getPercentage() >= pct + 10) {
-            pct += 10;
-            iprintf("%d%%...", pct);
-        }
-	}
-    if (linkCableMultiboot->getDetailedResult() != LinkCableMultiboot::Result::SUCCESS) {
-        iprintf("Failed to send: %d\n", (int)result);
-        goto wait;
-    }
-
-    Link::_MultiBootParam multiBootParameters;
-    multiBootParameters.client_data[0] = 0xFF;
-    multiBootParameters.client_data[1] = 0xFF;
-    multiBootParameters.client_data[2] = 0xFF;
-    multiBootParameters.palette_data = LINK_CABLE_MULTIBOOT_PALETTE_DATA;
-    multiBootParameters.client_bit = 0;
-    multiBootParameters.boot_srcp = (u8*)bios_dumper_gba + 0xC0;
-    multiBootParameters.boot_endp = (u8*)bios_dumper_gba + ((bios_dumper_gba_size + 0xF) & ~0xF);
-
-    // 9. Call SWI 0x25, with r0 set to the address of the multiboot parameter
-    // structure and r1 set to the communication mode (0 for normal, 1 for
-    // MultiPlay).
-    mb = Link::_MultiBoot(&multiBootParameters, 1);
-    iprintf("MultiBoot: %d\n", mb);
 
     iprintf("Sent, receiving bios\n");
     recv_bios();
