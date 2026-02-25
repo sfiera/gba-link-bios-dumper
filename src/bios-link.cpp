@@ -428,8 +428,13 @@ int main() {
         iprintf("Failed to send\n");
         goto wait;
     }
+    iprintf("Sent\n");
 
-    iprintf("Sent, receiving bios\n");
+    // wait 5s (60 frames)
+    // TODO: perform handshake instead of just waiting
+    wait(5 * 60 * 228);
+
+    iprintf("Receiving bios\n");
     recv_bios();
 
 #ifdef BIOS_WRITE_SRAM
