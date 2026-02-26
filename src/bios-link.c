@@ -6,9 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "bios_dumper.gba.h"
-#ifdef BIOS_CALC_SHA256
-#include "Sha256.h"
-#endif
+#include "crc32.h"
 
 char savetype[] = "SRAM_V123"; // So that save tools can figure out the format
 
@@ -337,44 +335,6 @@ bool sendRom(const u8* rom, u32 romSize) {
   }
 }
 
-#ifdef BIOS_CALC_SHA256
-const u8 sha256_checksum_agb[SHA256_DIGEST_SIZE] = {
-	0xfd, 0x25, 0x47, 0x72, 0x4b, 0x50, 0x5f, 0x48,
-	0x7e, 0x6d, 0xcb, 0x29, 0xec, 0x2e, 0xcf, 0xf3,
-	0xaf, 0x35, 0xa8, 0x41, 0xa7, 0x7a, 0xb2, 0xe8,
-	0x5f, 0xd8, 0x73, 0x50, 0xab, 0xd3, 0x65, 0x70
-};
-
-const u8 sha256_checksum_ntr[SHA256_DIGEST_SIZE] = {
-	0x78, 0x2e, 0xb3, 0x89, 0x42, 0x37, 0xec, 0x6a,
-	0xa4, 0x11, 0xb7, 0x8f, 0xfe, 0xe1, 0x90, 0x78,
-	0xba, 0xcf, 0x10, 0x41, 0x38, 0x56, 0xd3, 0x3c,
-	0xda, 0x10, 0xb4, 0x4f, 0xd9, 0xc2, 0x85, 0x6b
-};
-
-IWRAM_DATA CSha256 sha256_data;
-
-void calcSha256(void) {
-	u8 checksum[SHA256_DIGEST_SIZE];
-	int i;
-
-	iprintf("Calculating SHA256...\n");
-
-	Sha256_Init(&sha256_data);
-	Sha256_Update(&sha256_data, out, sizeof(out));
-	Sha256_Final(&sha256_data, checksum);
-
-	iprintf("SHA256: ");
-	for (i = 0; i < SHA256_DIGEST_SIZE; i++) {
-		iprintf("%02x", checksum[i]);
-	}
-	iprintf("\nCPU %s\n",
-		!memcmp(checksum, sha256_checksum_agb, SHA256_DIGEST_SIZE) ? "AGB" :
-		!memcmp(checksum, sha256_checksum_ntr, SHA256_DIGEST_SIZE) ? "NTR" : "???");
-	iprintf("\n");
-}
-#endif
-
 bool send_rom() {
     u32 size = (bios_dumper_gba_size + 0xF) & ~0xF;
     iprintf("Sending %ld bytes\n", size);
@@ -412,6 +372,7 @@ bool recv_bios() {
 }
 
 int main() {
+    crc32_init();
 	consoleDemoInit();
 
 	if (strcmp(savetype, "SRAM_V123") != 0) {
@@ -442,9 +403,11 @@ int main() {
 	}
 #endif
 
-#ifdef BIOS_CALC_SHA256
-	calcSha256();
-#endif
+    u32 crc = -1;
+    crc = crc32(crc, out, 0x4000);
+    crc = crc32(crc, (const u8*)"\x00\x40", 2);
+    iprintf("CRC32: %08lx\n", crc);
+    iprintf((crc == 0xe5016a5c) ? "CPU AGB\n" : "CPU ???\n");
 
 wait:
 	while (1) {

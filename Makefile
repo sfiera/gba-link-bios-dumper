@@ -11,7 +11,7 @@ include $(DEVKITARM)/base_tools
 
 TARGET      = bios_linker.gba bios_dumper.gba
 SRC_LINKER  = src/bios-link.c \
-              src/Sha256.c \
+              src/crc32.c \
               $(BUILD)/bios_dumper.gba.s
 SRC_DUMPER  = src/bios-dump.c
 
@@ -26,7 +26,7 @@ ARCH        = -marm
 LIBS        = -lgba
 LIBDIRS     = $(DEVKITPRO)/libgba
 
-DEFINES     = -DBIOS_WRITE_SRAM -DBIOS_CALC_SHA256
+DEFINES     = -DBIOS_WRITE_SRAM
 INCLUDES    = -iquote $(BUILD) \
               -iquote include \
               -iquote gba-link-connection/lib \
