@@ -7,14 +7,9 @@
 #include <unistd.h>
 #include "bios_dumper.gba.h"
 #include "crc32.h"
+#include "link.h"
 
 char savetype[] = "SRAM_V123"; // So that save tools can figure out the format
-
-volatile u16* REG_RCNT         = (volatile u16*)(0x04000134);
-volatile u16* REG_SIOCNT       = (volatile u16*)(0x04000128);
-volatile u16* REG_SIOMLT_SEND  = (volatile u16*)(0x0400012A);
-volatile u16* REG_SIOMULTI     = (volatile u16*)(0x04000120);
-volatile u16* REG_VCOUNT       = (volatile u16*)(0x04000006);
 
 __attribute__((section(".bss"))) u8 out[0x4000];
 
@@ -33,12 +28,12 @@ inline int _qran_range(int min, int max) {
 
 inline void wait(u32 verticalLines) {
   u32 count = 0;
-  u32 vCount = *REG_VCOUNT;
+  u32 vCount = REG_VCOUNT;
 
   while (count < verticalLines) {
-    if (*REG_VCOUNT != vCount) {
+    if (REG_VCOUNT != vCount) {
       count++;
-      vCount = *REG_VCOUNT;
+      vCount = REG_VCOUNT;
     }
   };
 }
@@ -97,19 +92,8 @@ static const int ACK_RESPONSE_MASK = 0xFF00;
 static const int HEADER_SIZE = 0xC0;
 static const int HEADER_PARTS = HEADER_SIZE / 2;
 
-void start() {
-  *REG_RCNT         = 0x0000;
-  *REG_SIOMLT_SEND  = 0x0000;
-  *REG_SIOCNT       = 0x2003;
-}
-
-void stop() {
-  *REG_SIOMLT_SEND = 0;
-  *REG_RCNT = (*REG_RCNT & ~(1 << 14)) | (1 << 15);
-}
-
-bool isBitHigh(u8 bit) { return (*REG_SIOCNT >> bit) & 1; }
-void setBitHigh(u8 bit) { *REG_SIOCNT |= 1 << bit; }
+bool isBitHigh(u8 bit) { return (REG_SIOCNT >> bit) & 1; }
+void setBitHigh(u8 bit) { REG_SIOCNT |= 1 << bit; }
 void startTransfer() { setBitHigh(7); }
 [[nodiscard]] bool allReady() { return isBitHigh(3); }
 [[nodiscard]] bool hasError() { return isBitHigh(6); }
@@ -121,16 +105,14 @@ typedef struct {
 } Response;
 
 Response transfer(u16 data) {
-  *REG_SIOMLT_SEND = data;
-  startTransfer();
-  while (isSending()) {}
   Response response = {{0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}, -1};
-  if (!allReady() || hasError())
-    return response;
-
-  for (u32 i = 0; i < 4; i++)
+  if (!link_send(data)) {
+      return response;
+  }
+  for (u32 i = 0; i < 4; i++) {
     response.data[i] = REG_SIOMULTI[i];
-  response.playerId = (*REG_SIOCNT & (0b11 << 4)) >> 4;
+  }
+  response.playerId = (REG_SIOCNT & (0b11 << 4)) >> 4;
 
   return response;
 }
@@ -193,10 +175,10 @@ bool detectClients(_MultiBootParam* multiBootParameters) {
   // 3. Send the word 0x6200 repeatedly until all detected clients respond
   // with 0x720X, where X is their client number (1-3). If they fail to do
   // this after 16 tries, delay 1/16s and go back to step 2. (*)
-  bool success = false;
   for (u32 t = 0; t < DETECTION_TRIES; t++) {
-    Response response = transfer(CMD_HANDSHAKE);
+    bool success = false;
     multiBootParameters->client_bit = 0;
+    Response response = transfer(CMD_HANDSHAKE);
 
     for (int i = 0; i < MAX_CLIENTS; ++i) {
       u32 value = response.data[1 + i];
@@ -216,11 +198,12 @@ bool detectClients(_MultiBootParam* multiBootParameters) {
       success = true;
     }
 
-    if (success)
-      break;
+    if (success) {
+      return true;
+    }
   }
 
-  return success;
+  return false;
 }
 
 bool confirmClients(_MultiBootParam* multiBootParameters) {
@@ -302,7 +285,7 @@ bool sendPalette(_MultiBootParam* multiBootParameters) {
 
 bool sendRom(const u8* rom, u32 romSize) {
   while (true) {
-    stop();
+    link_stop();
 
     // (*) instead of 1/16s, waiting a random number of frames works better
     wait(INITIAL_WAIT_MIN_LINES +
@@ -321,7 +304,7 @@ bool sendRom(const u8* rom, u32 romSize) {
 
     // 2. Initiate a multiplayer communication session, using either Normal mode
     // for a single client or MultiPlay mode for multiple clients.
-    start();
+    link_start();
 
     if (detectClients(&multiBootParameters) &&
         confirmClients(&multiBootParameters) &&
@@ -329,7 +312,7 @@ bool sendRom(const u8* rom, u32 romSize) {
         sendPalette(&multiBootParameters) &&
         confirmHandshakeData(&multiBootParameters)) {
       int result = _MultiBoot(&multiBootParameters, 1);
-      stop();
+      link_stop();
       return result == 0;
     }
   }
@@ -341,20 +324,11 @@ bool send_rom() {
     return sendRom(bios_dumper_gba, size);
 }
 
-bool recv_bios() {
-    *REG_RCNT         = 0x0000;
-    *REG_SIOMLT_SEND  = 0x0000;
-    *REG_SIOCNT       = 0x2003;
-
+void recv_bios() {
+    link_start();
     u8* data = out;
-    u8* const end = out + 0x4000;
-
-    while (true) {
-        *REG_SIOMLT_SEND = 0x0200;
-        *REG_SIOCNT |= 1 << 7;
-        while ((*REG_SIOCNT >> 7) & 1) {}
-
-        if (!((*REG_SIOCNT >> 3) & 1) || ((*REG_SIOCNT >> 6) & 1)) {
+    while (data != out + 0x4000) {
+        if (!link_send(0x0200)) {
             continue;
         }
         u16 message = REG_SIOMULTI[1];
@@ -363,12 +337,10 @@ bool recv_bios() {
             if (((data - out) % 0x400) == 0) {
                 iprintf(".");
             }
-            if (data == end) {
-                iprintf("\n");
-                return true;
-            }
         }
     }
+    iprintf("\n");
+    link_stop();
 }
 
 int main() {

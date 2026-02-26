@@ -1,10 +1,7 @@
 #include <gba_systemcalls.h>
+#include "link.h"
 
 __attribute__((section(".bss"))) u8 out[0x4000];
-
-volatile u16* REG_RCNT         = (volatile u16*)(0x04000134);
-volatile u16* REG_SIOCNT       = (volatile u16*)(0x04000128);
-volatile u16* REG_SIOMLT_SEND  = (volatile u16*)(0x0400012A);
 
 void dump(void) {
 	__asm__ __volatile__(
@@ -21,28 +18,15 @@ void dump(void) {
 }
 
 void send_rom() {
-    *REG_RCNT         = 0x0000;
-    *REG_SIOMLT_SEND  = 0x0000;
-    *REG_SIOCNT       = 0x2003;
-
+    link_start();
     const u8* data = out;
-    const u8* const end = out + 0x4000;
-
-    while (true) {
+    while (data != (out + 0x4000)) {
         u16 message = 0x0100 | *data;
-
-        *REG_SIOMLT_SEND = message;
-        *REG_SIOCNT |= 1 << 7;
-        while ((*REG_SIOCNT >> 7) & 1) {}
-
-        if (!((*REG_SIOCNT >> 3) & 1) || ((*REG_SIOCNT >> 6) & 1)) {
-            continue;
-        }
-        ++data;
-        if (data == end) {
-            return;
+        if (link_send(message)) {
+            ++data;
         }
     }
+    link_stop();
 }
 
 int main() {

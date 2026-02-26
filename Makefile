@@ -12,8 +12,10 @@ include $(DEVKITARM)/base_tools
 TARGET      = bios_linker.gba bios_dumper.gba
 SRC_LINKER  = src/bios-link.c \
               src/crc32.c \
+              src/link.c \
               $(BUILD)/bios_dumper.gba.s
-SRC_DUMPER  = src/bios-dump.c
+SRC_DUMPER  = src/bios-dump.c \
+              src/link.c
 
 .PHONY: all
 all: $(TARGET)
