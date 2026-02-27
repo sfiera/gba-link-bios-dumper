@@ -37,11 +37,13 @@ CFLAGS      = -g -Wall -O3 \
               $(ARCH) -mcpu=arm7tdmi -mtune=arm7tdmi \
               -fomit-frame-pointer \
               -ffast-math \
+              -ffunction-sections -fdata-sections  \
               $(DEFINES) \
               $(INCLUDES)
 
 LD          = $(CC)
 LDFLAGS     = -g $(ARCH) -Wl,-Map,$@.map \
+              -Wl,--gc-sections \
               $(LIBDIRS:%=-L%/lib) $(LIBS)
 
 OBJ_LINKER  = $(SRC_LINKER:%=$(BUILD)/%.o)

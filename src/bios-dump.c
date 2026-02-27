@@ -3,7 +3,7 @@
 
 __attribute__((section(".bss"))) u8 out[0x4000];
 
-void dump(void) {
+static void dump(void) {
 	__asm__ __volatile__(
 		"mov r0, #0 \n"
 		"ldr r11, =out \n"
@@ -17,7 +17,7 @@ void dump(void) {
 	: : : "r0", "r1", "r2", "r3", "r10", "r11", "r12", "lr", "memory");
 }
 
-void send_rom() {
+static void send_rom() {
     link_start();
     const u8* data = out;
     while (data != (out + 0x4000)) {

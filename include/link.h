@@ -13,4 +13,9 @@ void link_start();
 void link_stop();
 bool link_send(u16 message);
 
+bool link_detect_clients(u16 cmd, u16 ack, u8* client_mask);
+bool link_confirm_clients(u16 cmd, u16 ack, u8 client_mask);
+
+bool link_multiboot_send(const u8* rom, u32 romSize);
+
 #endif // _LINK_H
