@@ -55,8 +55,8 @@ int main() {
 	if (strcmp(savetype, "SRAM_V123") != 0) {
 		iprintf("Cartridge error, continuing anyway\n");
 	}
-	*(vu8*) SRAM = 0x55;
-	if (*(vu8*) SRAM != 0x55) {
+	*(volatile u8*) SRAM = 0x55;
+	if (*(volatile u8*) SRAM != 0x55) {
 		iprintf("Fatal SRAM error!\n");
 		return 1;
 	}
@@ -76,7 +76,7 @@ int main() {
 
 #ifdef BIOS_WRITE_SRAM
 	for (size_t i = 0; i < sizeof(out); ++i) {
-		((vu8*) SRAM)[i] = out[i];
+		((volatile u8*) SRAM)[i] = out[i];
 	}
 #endif
 

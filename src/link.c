@@ -70,10 +70,10 @@ typedef struct {
     u8 server_type;
 } _MultiBootParam;
 
-static s32 _MultiBoot(const _MultiBootParam* param, u32 mbmode) {
+static u32 _MultiBoot(const _MultiBootParam* param, u32 mbmode) {
     register union {
         const _MultiBootParam* ptr;
-        s32 res;
+        u32 res;
     } r0 asm("r0") = {param};
     register u32 r1 asm("r1") = mbmode;
     asm volatile inline("swi 0x25 << ((1f - . == 4) * -16); 1:"
