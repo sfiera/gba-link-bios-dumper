@@ -19,17 +19,16 @@ static bool send_rom() {
 
 static void recv_bios() {
     link_start();
-    u8* data = out;
-    while (data != out + 0x4000) {
+    u16* data = (u16*)out;
+    u32 size = 0x2000;
+    while (size) {
         if (!link_send(0x0200)) {
             continue;
         }
-        u16 message = REG_SIOMULTI[1];
-        if ((message & 0xFF00) == 0x0100) {
-            *(data++) = message & 0xFF;
-            if (((data - out) % 0x400) == 0) {
-                iprintf(".");
-            }
+        *(data++) = REG_SIOMULTI[1];
+        --size;
+        if ((size % 0x200) == 0) {
+            iprintf(".");
         }
     }
     iprintf("\n");

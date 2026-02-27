@@ -19,11 +19,12 @@ static void dump(void) {
 
 static void send_rom() {
     link_start();
-    const u8* data = out;
-    while (data != (out + 0x4000)) {
-        u16 message = 0x0100 | *data;
-        if (link_send(message)) {
+    const u16* data = (const u16*)out;
+    u32 size = 0x2000;
+    while (size) {
+        if (link_send(*data)) {
             ++data;
+            --size;
         }
     }
     link_stop();
