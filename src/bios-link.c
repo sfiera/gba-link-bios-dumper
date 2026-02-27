@@ -17,13 +17,23 @@ static bool send_rom() {
     return link_multiboot_send(bios_dumper_gba, size);
 }
 
-static void recv_bios() {
+static bool recv_bios() {
     link_start();
+    while (true) {
+        if (!link_send(0x0200)) {
+            continue;
+        } else if (REG_SIOMULTI[1] == 0x0201) {
+            break;
+        }
+    }
+    if (!link_send(0x0202)) {
+        return false;
+    }
     u16* data = (u16*)out;
     u32 size = 0x2000;
     while (size) {
-        if (!link_send(0x0200)) {
-            continue;
+        if (!link_send(0x0203)) {
+            return false;
         }
         *(data++) = REG_SIOMULTI[1];
         --size;
@@ -33,6 +43,7 @@ static void recv_bios() {
     }
     iprintf("\n");
     link_stop();
+    return true;
 }
 
 static void wait(u32 verticalLines) {
@@ -66,12 +77,11 @@ int main() {
     }
     iprintf("Sent\n");
 
-    // wait 5s (60 frames)
-    // TODO: perform handshake instead of just waiting
-    wait(5 * 60 * 228);
-
     iprintf("Receiving bios\n");
-    recv_bios();
+    if (!recv_bios()) {
+        iprintf("Failed to recv\n");
+        goto wait;
+    }
 
 #ifdef BIOS_WRITE_SRAM
 	for (size_t i = 0; i < sizeof(out); ++i) {

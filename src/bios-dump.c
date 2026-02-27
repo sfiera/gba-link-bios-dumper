@@ -19,6 +19,12 @@ static void dump(void) {
 
 static void send_rom() {
     link_start();
+    while (true) {
+        link_send(0x0201);
+        if (REG_SIOMULTI[0] == 0x0202) {
+            break;
+        }
+    }
     const u16* data = (const u16*)out;
     u32 size = 0x2000;
     while (size) {
