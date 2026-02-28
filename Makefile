@@ -12,9 +12,11 @@ include $(DEVKITARM)/base_tools
 TARGET      = bios_linker.gba bios_dumper.gba
 SRC_LINKER  = src/bios-link.c \
               src/crc32.c \
+              src/gfx.c \
               src/link.c \
               $(BUILD)/bios_dumper.gba.s
 SRC_DUMPER  = src/bios-dump.c \
+              src/gfx.c \
               src/link.c
 
 .PHONY: all
@@ -33,7 +35,7 @@ INCLUDES    = -iquote $(BUILD) \
               -iquote include \
               -iquote gba-link-connection/lib \
               $(LIBDIRS:%=-isystem %/include)
-CFLAGS      = -g -Wall -O3 \
+CFLAGS      = -g -Wall -Os \
               $(ARCH) -mcpu=arm7tdmi -mtune=arm7tdmi \
               -fomit-frame-pointer \
               -ffast-math \

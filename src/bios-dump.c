@@ -1,4 +1,5 @@
 #include <gba_systemcalls.h>
+#include "gfx.h"
 #include "link.h"
 
 __attribute__((section(".bss"))) u8 out[0x4000];
@@ -17,7 +18,7 @@ static void dump(void) {
 	: : : "r0", "r1", "r2", "r3", "r10", "r11", "r12", "lr", "memory");
 }
 
-static void send_rom() {
+static void send_bios() {
     link_start();
     while (true) {
         link_send(0x0201);
@@ -37,8 +38,11 @@ static void send_rom() {
 }
 
 int main() {
+    gfx_init();
 	dump();
-    send_rom();
+    gfx_show(gfx_upload);
+    send_bios();
+    gfx_show(gfx_success);
 	while (1) {
 		VBlankIntrWait();
 	}
