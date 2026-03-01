@@ -22,6 +22,12 @@ static const int HEADER_PARTS = HEADER_SIZE / 2;
 static bool send_header(u8 client_mask, const u8* rom);
 static bool send_palette(u8 client_mask, u8* client_data);
 static bool confirm_handshake_data(u8 client_mask, const u8* client_data, u8* handshake_data);
+static bool send_body(
+        u8 client_mask, const u8* rom,
+        u32 rom_size, u8 palette_data, const u8* client_data, u8 handshake_data,
+        u16* checksum);
+static bool wait_checksum(u8 client_mask);
+static bool confirm_checksum(u8 client_mask, u16 checksum);
 
 static u32 randomSeed = 123;
 
@@ -70,17 +76,6 @@ typedef struct {
     u8 server_type;
 } _MultiBootParam;
 
-static u32 _MultiBoot(const _MultiBootParam* param, u32 mbmode) {
-    register union {
-        const _MultiBootParam* ptr;
-        u32 res;
-    } r0 asm("r0") = {param};
-    register u32 r1 asm("r1") = mbmode;
-    asm volatile inline("swi 0x25 << ((1f - . == 4) * -16); 1:"
-                        : "+r"(r0), "+r"(r1)::"r3");
-    return r0.res;
-}
-
 void link_start() {
   REG_RCNT         = 0x0000;
   REG_SIOMLT_SEND  = 0x0000;
@@ -99,7 +94,7 @@ bool link_send(u16 message) {
     return (REG_SIOCNT & 0x0048) == 0x0008;
 }
 
-bool link_multiboot_send(const u8* rom, u32 romSize) {
+bool link_multiboot_send(const u8* rom, u32 rom_size) {
     while (true) {
         link_stop();
 
@@ -116,7 +111,7 @@ bool link_multiboot_send(const u8* rom, u32 romSize) {
         param.palette_data = LINK_CABLE_MULTIBOOT_PALETTE_DATA;
         param.client_bit = 0;
         param.boot_srcp = (u8*)rom + HEADER_SIZE;
-        param.boot_endp = (u8*)rom + romSize;
+        param.boot_endp = (u8*)rom + rom_size;
 
         // 2. Initiate a multiplayer communication session, using either Normal mode
         // for a single client or MultiPlay mode for multiple clients.
@@ -127,27 +122,33 @@ bool link_multiboot_send(const u8* rom, u32 romSize) {
             send_header(param.client_bit, rom) &&
             send_palette(param.client_bit, param.client_data) &&
             confirm_handshake_data(param.client_bit, param.client_data, &param.handshake_data)) {
-            int result = _MultiBoot(&param, 1);
+            // From here on, the MultiBoot BIOS call would normally handle everything.
+            wait(FRAME_LINES * 4);
+            u16 checksum;
+            bool result = send_body(
+                    param.client_bit, rom, rom_size,
+                    param.palette_data, param.client_data, param.handshake_data,
+                    &checksum) &&
+                wait_checksum(param.client_bit) &&
+                confirm_checksum(param.client_bit, checksum);
             link_stop();
-            return result == 0;
+            return result;
         }
     }
 }
 
 typedef struct {
-    u32 data[4];
-    int playerId;  // (-1 = unknown)
+    u16 data[4];
 } Response;
 
 Response transfer(u16 data) {
-    Response response = {{0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}, -1};
+    Response response = {{0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}};
     if (!link_send(data)) {
         return response;
     }
     for (u32 i = 0; i < 4; i++) {
         response.data[i] = REG_SIOMULTI[i];
     }
-    response.playerId = (REG_SIOCNT & (0b11 << 4)) >> 4;
 
     return response;
 }
@@ -302,4 +303,83 @@ static bool confirm_handshake_data(u8 client_mask, const u8* client_data, u8* ha
     u16 msg = CMD_CONFIRM_HANDSHAKE_DATA | *handshake_data;
     Response response = transfer(msg);
     return isResponseSameAsValue(response, client_mask, ACK_RESPONSE, ACK_RESPONSE_MASK);
+}
+
+static u32 dword(u8 lo, const u8* hi3) {
+    return lo | (hi3[0] << 8) | (hi3[1] << 16) | (hi3[2] << 24);
+}
+
+static bool send_body(
+        u8 client_mask, const u8* rom,
+        u32 rom_size, u8 palette_data, const u8* client_data, u8 handshake_data,
+        u16 *checksum) {
+    u8 random_data[3] = {0xFF, 0xFF, 0xFF};
+    Response response = transfer((rom_size / 4) - 0x64);
+    //Response response = transfer(0x20);
+    for (int i = 0; i < MAX_CLIENTS; ++i) {
+        u8 client_bit = 1 << (i + 1);
+        if (!(client_mask & client_bit)) {
+            continue;
+        } else if ((response.data[i + 1] & 0xFF00) != 0x7300) {
+            return false;
+        }
+        random_data[i] = response.data[i + 1] & 0xFF;
+    }
+
+    u32 c = 0xFFF8;
+    u16 x = 0xA517;
+    u32 k = 0x6465646F;
+    u32 m = dword(palette_data, client_data);
+    u32 f = dword(handshake_data, random_data);
+
+
+    for (u32 i = HEADER_SIZE; i < rom_size; i += 4) {
+        u32 word = *(const u32*)(rom + i);
+        c ^= word;
+        for (int bit = 0; bit < 32; ++bit) {
+            c = (c >> 1) ^ ((c & 1) ? x : 0);
+        }
+        m = (0x6F646573 * m) + 1;
+        u32 data = word ^ m ^ k ^ -(0x02000000 + i);
+        response = transfer(data);
+        response = transfer(data >> 16);
+    }
+    c ^= f;
+    for (int bit = 0; bit < 32; ++bit) {
+        c = (c >> 1) ^ ((c & 1) ? x : 0);
+    }
+    *checksum = c;
+    return true;
+}
+
+static bool wait_checksum(u8 client_mask) {
+    bool ready = false;
+    while (!ready) {
+        Response response = transfer(0x0065);
+        ready = true;
+        for (int i = 0; i < MAX_CLIENTS; ++i) {
+            u8 client_bit = 1 << (i + 1);
+            if (!(client_mask & client_bit)) {
+                continue;
+            } else if (response.data[i + 1] != 0x0075) {
+                ready = false;
+                break;
+            }
+        }
+    }
+    transfer(0x0066);
+    return true;
+}
+
+static bool confirm_checksum(u8 client_mask, u16 checksum) {
+    Response response = transfer(checksum);
+    for (int i = 0; i < MAX_CLIENTS; ++i) {
+        u8 client_bit = 1 << (i + 1);
+        if (!(client_mask & client_bit)) {
+            continue;
+        } else if (response.data[i + 1] != checksum) {
+            return false;
+        }
+    }
+    return true;
 }

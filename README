@@ -5,8 +5,9 @@ and receiving the dumped BIOS back on the sending side. This can be useful if
 you have a linkable device that can run GBA ROMs (Game Bub, Analogue Pocket)
 and want to dump the BIOS from a real GBA.
 
-The utility currently depends on the sending device having at least a BIOS
-implementation of MultiBoot (SWI 0x25).
+In addition to the parts of the multiboot process that all software must
+implement, this utility also contains a reimplementation of the MultiBoot BIOS
+function, allowing it to run even in the absence of a compatible BIOS.
 
 The technique used to dump the BIOS comes from endrift. It jumps directly into
 the CpuFastSet routine in the BIOS, bypassing the region check, and then

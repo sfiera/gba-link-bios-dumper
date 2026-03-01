@@ -82,6 +82,5 @@ int main() {
 
 wait:
 	while (1) {
-		VBlankIntrWait();
 	}
 }

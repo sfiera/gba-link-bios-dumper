@@ -1,4 +1,3 @@
-#include <gba_systemcalls.h>
 #include "gfx.h"
 #include "link.h"
 
@@ -43,7 +42,5 @@ int main() {
     gfx_show(gfx_upload);
     send_bios();
     gfx_show(gfx_success);
-	while (1) {
-		VBlankIntrWait();
-	}
+	while (1) { }
 }
