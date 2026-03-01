@@ -31,6 +31,9 @@ static void send_bios() {
         if (link_send(*data)) {
             ++data;
             --size;
+            if ((size % 0x100) == 0) {
+                gfx_toggle((0x1f00 - size) >> 8);
+            }
         }
     }
     link_stop();
