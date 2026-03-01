@@ -1,31 +1,29 @@
 #include "link.h"
 
-static const int FRAME_LINES = 228;
-static const int INITIAL_WAIT_MIN_FRAMES = 4;
+static const int FRAME_LINES                    = 228;
+static const int INITIAL_WAIT_MIN_FRAMES        = 4;
 static const int INITIAL_WAIT_MAX_RANDOM_FRAMES = 10;
-static const int INITIAL_WAIT_MIN_LINES =
-    FRAME_LINES * INITIAL_WAIT_MIN_FRAMES;
-static const int DETECTION_TRIES = 16;
-static const int MAX_CLIENTS = 3;
-static const int CLIENT_NO_DATA = 0xFF;
-static const int CMD_HANDSHAKE = 0x6200;
-static const int ACK_HANDSHAKE = 0x7200;
-static const int CMD_CONFIRM_CLIENTS = 0x6100;
-static const int CMD_SEND_PALETTE = 0x6300;
-static const int HANDSHAKE_DATA = 0x11;
-static const int CMD_CONFIRM_HANDSHAKE_DATA = 0x6400;
-static const int ACK_RESPONSE = 0x7300;
-static const int ACK_RESPONSE_MASK = 0xFF00;
-static const int HEADER_SIZE = 0xC0;
-static const int HEADER_PARTS = HEADER_SIZE / 2;
+static const int INITIAL_WAIT_MIN_LINES         = FRAME_LINES * INITIAL_WAIT_MIN_FRAMES;
+static const int DETECTION_TRIES                = 16;
+static const int MAX_CLIENTS                    = 3;
+static const int CLIENT_NO_DATA                 = 0xFF;
+static const int CMD_HANDSHAKE                  = 0x6200;
+static const int ACK_HANDSHAKE                  = 0x7200;
+static const int CMD_CONFIRM_CLIENTS            = 0x6100;
+static const int CMD_SEND_PALETTE               = 0x6300;
+static const int HANDSHAKE_DATA                 = 0x11;
+static const int CMD_CONFIRM_HANDSHAKE_DATA     = 0x6400;
+static const int ACK_RESPONSE                   = 0x7300;
+static const int ACK_RESPONSE_MASK              = 0xFF00;
+static const int HEADER_SIZE                    = 0xC0;
+static const int HEADER_PARTS                   = HEADER_SIZE / 2;
 
 static bool send_header(u8 client_mask, const u8* rom);
 static bool send_palette(u8 client_mask, u8* client_data);
 static bool confirm_handshake_data(u8 client_mask, const u8* client_data, u8* handshake_data);
 static bool send_body(
-        u8 client_mask, const u8* rom,
-        u32 rom_size, u8 palette_data, const u8* client_data, u8 handshake_data,
-        u16* checksum);
+    u8 client_mask, const u8* rom, u32 rom_size, u8 palette_data, const u8* client_data,
+    u8 handshake_data, u16* checksum);
 static bool wait_checksum(u8 client_mask);
 static bool confirm_checksum(u8 client_mask, u16 checksum);
 
@@ -36,12 +34,10 @@ static int _qran() {
     return (randomSeed >> 16) & 0x7FFF;
 }
 
-static int _qran_range(int min, int max) {
-    return (_qran() * (max - min) >> 15) + min;
-}
+static int _qran_range(int min, int max) { return (_qran() * (max - min) >> 15) + min; }
 
 static void wait(u32 verticalLines) {
-    u32 count = 0;
+    u32 count  = 0;
     u32 vCount = REG_VCOUNT;
 
     while (count < verticalLines) {
@@ -56,41 +52,42 @@ static void wait(u32 verticalLines) {
 
 typedef struct {
     u32 reserved1[5];
-    u8 handshake_data;
-    u8 padding;
+    u8  handshake_data;
+    u8  padding;
     u16 handshake_timeout;
-    u8 probe_count;
-    u8 client_data[3];
-    u8 palette_data;
-    u8 response_bit;
-    u8 client_bit;
-    u8 reserved2;
+    u8  probe_count;
+    u8  client_data[3];
+    u8  palette_data;
+    u8  response_bit;
+    u8  client_bit;
+    u8  reserved2;
     u8* boot_srcp;
     u8* boot_endp;
     u8* masterp;
     u8* reserved3[3];
     u32 system_work2[4];
-    u8 sendflag;
-    u8 probe_target_bit;
-    u8 check_wait;
-    u8 server_type;
+    u8  sendflag;
+    u8  probe_target_bit;
+    u8  check_wait;
+    u8  server_type;
 } _MultiBootParam;
 
 void link_start() {
-  REG_RCNT         = 0x0000;
-  REG_SIOMLT_SEND  = 0x0000;
-  REG_SIOCNT       = 0x2003;
+    REG_RCNT        = 0x0000;
+    REG_SIOMLT_SEND = 0x0000;
+    REG_SIOCNT      = 0x2003;
 }
 
 void link_stop() {
-  REG_SIOMLT_SEND  = 0x0000;
-  REG_RCNT         = 0x0000;
+    REG_SIOMLT_SEND = 0x0000;
+    REG_RCNT        = 0x0000;
 }
 
 bool link_send(u16 message) {
     REG_SIOMLT_SEND = message;
     REG_SIOCNT |= 0x0080;
-    while (REG_SIOCNT & 0x0080) {}
+    while (REG_SIOCNT & 0x0080) {
+    }
     return (REG_SIOCNT & 0x0048) == 0x0008;
 }
 
@@ -99,19 +96,18 @@ bool link_multiboot_send(const u8* rom, u32 rom_size) {
         link_stop();
 
         // (*) instead of 1/16s, waiting a random number of frames works better
-        wait(INITIAL_WAIT_MIN_LINES +
-             FRAME_LINES *
-             _qran_range(1, INITIAL_WAIT_MAX_RANDOM_FRAMES));
+        wait(
+            INITIAL_WAIT_MIN_LINES + FRAME_LINES * _qran_range(1, INITIAL_WAIT_MAX_RANDOM_FRAMES));
 
         // 1. Prepare a "Multiboot Parameter Structure" in RAM.
         _MultiBootParam param;
         param.client_data[0] = CLIENT_NO_DATA;
         param.client_data[1] = CLIENT_NO_DATA;
         param.client_data[2] = CLIENT_NO_DATA;
-        param.palette_data = LINK_CABLE_MULTIBOOT_PALETTE_DATA;
-        param.client_bit = 0;
-        param.boot_srcp = (u8*)rom + HEADER_SIZE;
-        param.boot_endp = (u8*)rom + rom_size;
+        param.palette_data   = LINK_CABLE_MULTIBOOT_PALETTE_DATA;
+        param.client_bit     = 0;
+        param.boot_srcp      = (u8*)rom + HEADER_SIZE;
+        param.boot_endp      = (u8*)rom + rom_size;
 
         // 2. Initiate a multiplayer communication session, using either Normal mode
         // for a single client or MultiPlay mode for multiple clients.
@@ -124,13 +120,12 @@ bool link_multiboot_send(const u8* rom, u32 rom_size) {
             confirm_handshake_data(param.client_bit, param.client_data, &param.handshake_data)) {
             // From here on, the MultiBoot BIOS call would normally handle everything.
             wait(FRAME_LINES * 4);
-            u16 checksum;
+            u16  checksum;
             bool result = send_body(
-                    param.client_bit, rom, rom_size,
-                    param.palette_data, param.client_data, param.handshake_data,
-                    &checksum) &&
-                wait_checksum(param.client_bit) &&
-                confirm_checksum(param.client_bit, checksum);
+                              param.client_bit, rom, rom_size, param.palette_data,
+                              param.client_data, param.handshake_data, &checksum) &&
+                          wait_checksum(param.client_bit) &&
+                          confirm_checksum(param.client_bit, checksum);
             link_stop();
             return result;
         }
@@ -153,10 +148,7 @@ Response transfer(u16 data) {
     return response;
 }
 
-bool isResponseSameAsValue(Response response,
-                           u8 clientMask,
-                           u16 wantedValue,
-                           u16 mask) {
+bool isResponseSameAsValue(Response response, u8 clientMask, u16 wantedValue, u16 mask) {
     bool any = false;
     for (int i = 0; i < MAX_CLIENTS; ++i) {
         u32 value = response.data[1 + i];
@@ -172,9 +164,7 @@ bool isResponseSameAsValue(Response response,
     return any;
 }
 
-bool isResponseSameAsValueWithClientBit(Response response,
-                                        u8 clientMask,
-                                        u32 wantedValue) {
+bool isResponseSameAsValueWithClientBit(Response response, u8 clientMask, u32 wantedValue) {
     bool any = false;
     for (int i = 0; i < MAX_CLIENTS; ++i) {
         u32 value = response.data[1 + i];
@@ -236,11 +226,10 @@ static bool send_header(u8 client_mask, const u8* rom) {
     // transferring in the single-client 32-bit mode, you still need to send
     // only 16 bits at a time).
     u16* headerOut = (u16*)rom;
-    u32 remaining = HEADER_PARTS;
+    u32  remaining = HEADER_PARTS;
     while (remaining > 0) {
         Response response = transfer(*(headerOut++));
-        if (!isResponseSameAsValueWithClientBit(
-                        response, client_mask, remaining << 8))
+        if (!isResponseSameAsValueWithClientBit(response, client_mask, remaining << 8))
             return false;
 
         remaining--;
@@ -250,12 +239,10 @@ static bool send_header(u8 client_mask, const u8* rom) {
     // The clients should respond 0x000Y and 0x720Y.
     Response response;
     response = transfer(CMD_HANDSHAKE);
-    if (!isResponseSameAsValueWithClientBit(response,
-                                            client_mask, 0))
+    if (!isResponseSameAsValueWithClientBit(response, client_mask, 0))
         return false;
     response = transfer(CMD_HANDSHAKE | client_mask);
-    if (!isResponseSameAsValueWithClientBit(
-                    response, client_mask, ACK_HANDSHAKE))
+    if (!isResponseSameAsValueWithClientBit(response, client_mask, ACK_HANDSHAKE))
         return false;
 
     return true;
@@ -268,8 +255,8 @@ static bool send_palette(u8 client_mask, u8* client_data) {
     u16 data = CMD_SEND_PALETTE | LINK_CABLE_MULTIBOOT_PALETTE_DATA;
 
     for (u32 i = 0; i < DETECTION_TRIES; i++) {
-        Response response = transfer(data);
-        u8 successes = 0;
+        Response response  = transfer(data);
+        u8       successes = 0;
 
         for (u32 i = 0; i < MAX_CLIENTS; i++) {
             u32 value = response.data[1 + i];
@@ -277,8 +264,7 @@ static bool send_palette(u8 client_mask, u8* client_data) {
                 continue;
             }
             u8 clientBit = 1 << (i + 1);
-            if (!(client_mask & clientBit) ||
-                ((value & ACK_RESPONSE_MASK) != ACK_RESPONSE)) {
+            if (!(client_mask & clientBit) || ((value & ACK_RESPONSE_MASK) != ACK_RESPONSE)) {
                 successes = 0;
                 break;
             }
@@ -299,8 +285,8 @@ static bool confirm_handshake_data(u8 client_mask, const u8* client_data, u8* ha
     // structure. This should be calculated as 0x11 + the sum of the three
     // client_data bytes. Send 0x64HH, where HH is the handshake_data.
     // The clients should respond 0x77GG, where GG is something unimportant.
-    *handshake_data = (HANDSHAKE_DATA + client_data[0] + client_data[1] + client_data[2]) & 0xFF;
-    u16 msg = CMD_CONFIRM_HANDSHAKE_DATA | *handshake_data;
+    *handshake_data   = (HANDSHAKE_DATA + client_data[0] + client_data[1] + client_data[2]) & 0xFF;
+    u16      msg      = CMD_CONFIRM_HANDSHAKE_DATA | *handshake_data;
     Response response = transfer(msg);
     return isResponseSameAsValue(response, client_mask, ACK_RESPONSE, ACK_RESPONSE_MASK);
 }
@@ -310,12 +296,11 @@ static u32 dword(u8 lo, const u8* hi3) {
 }
 
 static bool send_body(
-        u8 client_mask, const u8* rom,
-        u32 rom_size, u8 palette_data, const u8* client_data, u8 handshake_data,
-        u16 *checksum) {
-    u8 random_data[3] = {0xFF, 0xFF, 0xFF};
-    Response response = transfer((rom_size / 4) - 0x64);
-    //Response response = transfer(0x20);
+    u8 client_mask, const u8* rom, u32 rom_size, u8 palette_data, const u8* client_data,
+    u8 handshake_data, u16* checksum) {
+    u8       random_data[3] = {0xFF, 0xFF, 0xFF};
+    Response response       = transfer((rom_size / 4) - 0x64);
+    // Response response = transfer(0x20);
     for (int i = 0; i < MAX_CLIENTS; ++i) {
         u8 client_bit = 1 << (i + 1);
         if (!(client_mask & client_bit)) {
@@ -332,14 +317,13 @@ static bool send_body(
     u32 m = dword(palette_data, client_data);
     u32 f = dword(handshake_data, random_data);
 
-
     for (u32 i = HEADER_SIZE; i < rom_size; i += 4) {
         u32 word = *(const u32*)(rom + i);
         c ^= word;
         for (int bit = 0; bit < 32; ++bit) {
             c = (c >> 1) ^ ((c & 1) ? x : 0);
         }
-        m = (0x6F646573 * m) + 1;
+        m        = (0x6F646573 * m) + 1;
         u32 data = word ^ m ^ k ^ -(0x02000000 + i);
         response = transfer(data);
         response = transfer(data >> 16);
@@ -356,7 +340,7 @@ static bool wait_checksum(u8 client_mask) {
     bool ready = false;
     while (!ready) {
         Response response = transfer(0x0065);
-        ready = true;
+        ready             = true;
         for (int i = 0; i < MAX_CLIENTS; ++i) {
             u8 client_bit = 1 << (i + 1);
             if (!(client_mask & client_bit)) {

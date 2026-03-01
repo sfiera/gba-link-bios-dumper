@@ -1,12 +1,12 @@
 #include <string.h>
 #include "bios_dumper.gba.h"
 #include "crc32.h"
-#include "link.h"
 #include "gfx.h"
+#include "link.h"
 
 #define SRAM ((volatile u8*)0x0e000000)
 
-static char savetype[] = "SRAM_V123"; // So that save tools can figure out the format
+static char savetype[] = "SRAM_V123";  // So that save tools can figure out the format
 
 __attribute__((section(".bss"))) u8 out[0x4000];
 
@@ -28,7 +28,7 @@ static bool recv_bios() {
         return false;
     }
     u16* data = (u16*)out;
-    u32 size = 0x2000;
+    u32  size = 0x2000;
     while (size) {
         if (!link_send(0x0203)) {
             return false;
@@ -47,16 +47,16 @@ int main() {
     crc32_init();
     gfx_init();
 
- 	if (strcmp(savetype, "SRAM_V123") != 0) {
+    if (strcmp(savetype, "SRAM_V123") != 0) {
         gfx_show(gfx_failure);
         goto wait;
- 	}
+    }
 
-	*SRAM = 0x55;
-	if (*SRAM != 0x55) {
+    *SRAM = 0x55;
+    if (*SRAM != 0x55) {
         gfx_show(gfx_failure);
         goto wait;
-	}
+    }
 
     gfx_show(gfx_upload);
     if (!send_rom()) {
@@ -71,17 +71,17 @@ int main() {
     }
 
 #ifdef BIOS_WRITE_SRAM
-	for (size_t i = 0; i < sizeof(out); ++i) {
-		SRAM[i] = out[i];
-	}
+    for (size_t i = 0; i < sizeof(out); ++i) {
+        SRAM[i] = out[i];
+    }
 #endif
 
     u32 crc = -1;
-    crc = crc32(crc, out, 0x4000);
-    crc = crc32(crc, (const u8*)"\x00\x40", 2);
+    crc     = crc32(crc, out, 0x4000);
+    crc     = crc32(crc, (const u8*)"\x00\x40", 2);
     gfx_show((crc == 0xe5016a5c) ? gfx_success : gfx_failure);
 
 wait:
-	while (1) {
-	}
+    while (1) {
+    }
 }

@@ -3,11 +3,11 @@
 
 #include "types.h"
 
-#define REG_RCNT         (*(volatile u16*)0x04000134)
-#define REG_SIOCNT       (*(volatile u16*)0x04000128)
-#define REG_SIOMLT_SEND  (*(volatile u16*)0x0400012A)
-#define REG_SIOMULTI     ((volatile u16*)0x04000120)
-#define REG_VCOUNT       (*(volatile u16*)0x04000006)
+#define REG_RCNT (*(volatile u16*)0x04000134)
+#define REG_SIOCNT (*(volatile u16*)0x04000128)
+#define REG_SIOMLT_SEND (*(volatile u16*)0x0400012A)
+#define REG_SIOMULTI ((volatile u16*)0x04000120)
+#define REG_VCOUNT (*(volatile u16*)0x04000006)
 
 void link_start();
 void link_stop();
@@ -18,4 +18,4 @@ bool link_confirm_clients(u16 cmd, u16 ack, u8 client_mask);
 
 bool link_multiboot_send(const u8* rom, u32 romSize);
 
-#endif // _LINK_H
+#endif  // _LINK_H
