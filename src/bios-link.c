@@ -34,8 +34,8 @@ static bool recv_bios() {
         }
         *(data++) = REG_SIOMULTI[1];
         --size;
-        if ((size % 0x200) == 0) {
-            //iprintf(".");
+        if ((size % 0x100) == 0) {
+            gfx_toggle((0x1f00 - size) >> 8);
         }
     }
     link_stop();

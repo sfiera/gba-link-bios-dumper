@@ -16,5 +16,6 @@ extern const u32 gfx_download[7];
 
 void gfx_init();
 void gfx_show(const u32* icon);
+void gfx_toggle(u8 pos);
 
 #endif  // _GFX_H

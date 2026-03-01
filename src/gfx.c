@@ -81,7 +81,7 @@ void gfx_init() {
 
 void gfx_show(const u32* icon) {
     u16* tilemap = (u16*)0x06004000;
-    tilemap += 32 + 1;
+    tilemap += 0x21;
     for (int i = 0; i < 7; ++i) {
         u32 row = *(icon++);
         for (int j = 0; j < 7; ++j) {
@@ -90,4 +90,22 @@ void gfx_show(const u32* icon) {
         }
         tilemap += 25;
     }
+}
+
+static const u8 positions[32] = {
+    0x04, 0x05, 0x06, 0x07,
+    0x08,
+    0x18, 0x28, 0x38, 0x48, 0x58, 0x68, 0x78,
+    0x88,
+    0x87, 0x86, 0x85, 0x84, 0x83, 0x82, 0x81,
+    0x80,
+    0x70, 0x60, 0x50, 0x40, 0x30, 0x20, 0x10,
+    0x00,
+    0x01, 0x02, 0x03,
+};
+
+void gfx_toggle(u8 pos) {
+    pos = positions[pos];
+    u16* tilemap = (u16*)0x06004000;
+    tilemap[((pos & 0xF0) << 1) | (pos & 0x0F)] ^= 0xF;
 }
