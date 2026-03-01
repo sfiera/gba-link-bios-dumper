@@ -27,8 +27,8 @@ GAME_CODE   = 0000
 MAKER_CODE  = 00
 
 ARCH        = -marm
-LIBS        = -lgba
-LIBDIRS     = $(DEVKITPRO)/libgba
+LIBS        =
+LIBDIRS     =
 
 DEFINES     = -DBIOS_WRITE_SRAM
 INCLUDES    = -iquote $(BUILD) \

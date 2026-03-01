@@ -1,9 +1,10 @@
-#include <gba_systemcalls.h>
 #include <string.h>
 #include "bios_dumper.gba.h"
 #include "crc32.h"
 #include "link.h"
 #include "gfx.h"
+
+#define SRAM ((volatile u8*)0x0e000000)
 
 static char savetype[] = "SRAM_V123"; // So that save tools can figure out the format
 
@@ -51,8 +52,8 @@ int main() {
         goto wait;
  	}
 
-	*(volatile u8*) SRAM = 0x55;
-	if (*(volatile u8*) SRAM != 0x55) {
+	*SRAM = 0x55;
+	if (*SRAM != 0x55) {
         gfx_show(gfx_failure);
         goto wait;
 	}
@@ -71,7 +72,7 @@ int main() {
 
 #ifdef BIOS_WRITE_SRAM
 	for (size_t i = 0; i < sizeof(out); ++i) {
-		((volatile u8*) SRAM)[i] = out[i];
+		SRAM[i] = out[i];
 	}
 #endif
 
